@@ -66,12 +66,15 @@ class ResidueDataset:
                 if atype in unique_atoms:
                     atom_features[j, unique_atoms.index(atype)] = 1
                     
-            # Get label
-            label = self.aa_to_idx[label_row['label']]
+            # Get label - handle potential numeric labels
+            label = label_row['label']
+            if isinstance(label, (int, np.integer)):
+                label = self.amino_acids[label]
+            label_idx = self.aa_to_idx[label]
             
             pos_list.append(torch.FloatTensor(positions))
             feat_list.append(torch.FloatTensor(atom_features))
-            label_list.append(label)
+            label_list.append(label_idx)
             
         return pos_list, feat_list, label_list
 
