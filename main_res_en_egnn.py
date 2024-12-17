@@ -2,6 +2,7 @@ import argparse
 import torch
 from torch import nn, optim
 import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import json
 from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
@@ -112,6 +113,12 @@ test_loader = DataLoader(test_dataset, batch_size=args.batch_size,
 class EGNNForResidueIdentity(nn.Module):
     def __init__(self, in_node_nf, hidden_nf, out_node_nf, n_layers, attention):
         super().__init__()
+        # Add input validation
+        assert in_node_nf > 0, "in_node_nf must be positive"
+        assert hidden_nf > 0, "hidden_nf must be positive"
+        assert out_node_nf > 0, "out_node_nf must be positive"
+        assert n_layers > 0, "n_layers must be positive"
+        
         self.egnn = EGNN(in_node_nf=in_node_nf, 
                         hidden_nf=hidden_nf,
                         out_node_nf=hidden_nf,
@@ -124,14 +131,20 @@ class EGNNForResidueIdentity(nn.Module):
         )
         
     def forward(self, h, x, edges):
-        # Process single environment
-        # Compute edge features based on distances
-        row, col = edges
-        edge_attr = torch.sum((x[:, row] - x[:, col])**2, -1).unsqueeze(1)
+        # Make sure h and x have batch dimension
+        if h.dim() == 2:
+            h = h.unsqueeze(0)  # Add batch dimension
+        if x.dim() == 2:
+            x = x.unsqueeze(0)  # Add batch dimension
+            
+        # Process through EGNN
+        edge_attr = None  # Let the EGNN handle edge attributes
         h, x = self.egnn(h, x, edges, edge_attr)
+        
         # Global average pooling over nodes
-        h = torch.mean(h, dim=0)
-        # Return logits for amino acid prediction 
+        h = torch.mean(h.squeeze(0), dim=0)  # Remove batch dim before pooling
+        
+        # Final MLP prediction
         return self.mlp(h).unsqueeze(0)
 
 model = EGNNForResidueIdentity(
@@ -152,21 +165,21 @@ def train(epoch):
     total = 0
     
     for batch_idx, (pos_list, feat_list, labels) in enumerate(train_loader):
-        # Process each residue environment separately
         batch_outputs = []
         labels = labels.to(args.device)
         
         for pos, feat in zip(pos_list, feat_list):
+            # Ensure proper dimensions and device
             pos = pos.to(args.device)
             feat = feat.to(args.device)
             
-            # Create edges for this single environment
+            # Create edges - ensure proper device placement
             n_atoms = pos.size(0)
-            edges = torch.combinations(torch.arange(n_atoms), 2).t()
-            edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+            edges = torch.combinations(torch.arange(n_atoms, device=args.device), 2).t()
+            edges = torch.cat([edges, edges.flip(0)], dim=1)
             
             # Forward pass for this environment
-            output = model(feat.unsqueeze(0), pos.unsqueeze(0), edges)
+            output = model(feat, pos, edges)  # Remove unsqueeze here since forward handles it
             batch_outputs.append(output)
             
         # Combine outputs
