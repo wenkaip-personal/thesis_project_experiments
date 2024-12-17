@@ -125,11 +125,14 @@ class EGNNForResidueIdentity(nn.Module):
         
     def forward(self, h, x, edges):
         # Process single environment
-        h, x = self.egnn(h, x, edges)
+        # Compute edge features based on distances
+        row, col = edges
+        edge_attr = torch.sum((x[:, row] - x[:, col])**2, -1).unsqueeze(1)
+        h, x = self.egnn(h, x, edges, edge_attr)
         # Global average pooling over nodes
         h = torch.mean(h, dim=0)
-        # Return logits for amino acid prediction
-        return self.mlp(h).unsqueeze(0)  # Add batch dimension
+        # Return logits for amino acid prediction 
+        return self.mlp(h).unsqueeze(0)
 
 model = EGNNForResidueIdentity(
     in_node_nf=5,  # Number of atom types
