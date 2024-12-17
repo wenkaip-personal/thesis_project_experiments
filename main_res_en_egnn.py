@@ -79,16 +79,22 @@ class ResidueDataset:
         return pos_list, feat_list, label_list
 
 def collate_fn(batch):
+    # Instead of stacking tensors directly, we'll return them as lists
+    # Each item in these lists corresponds to one residue environment
     all_pos, all_feat, all_labels = [], [], []
-    for pos, feat, labels in batch:
-        all_pos.extend(pos)
-        all_feat.extend(feat) 
-        all_labels.extend(labels)
-    return (
-        torch.stack(all_pos),
-        torch.stack(all_feat),
-        torch.LongTensor(all_labels)
-    )
+    
+    # Unpack the nested batch structure 
+    for sample in batch:
+        # Each sample contains lists of pos, feat, labels
+        pos_list, feat_list, labels_list = sample
+        
+        # Extend our lists with data for each residue environment
+        all_pos.extend([pos.to(torch.float32) for pos in pos_list])
+        all_feat.extend([feat.to(torch.float32) for feat in feat_list])
+        all_labels.extend(labels_list)
+        
+    # Return lists rather than stacked tensors
+    return all_pos, all_feat, torch.LongTensor(all_labels)
 
 # Initialize datasets and dataloaders
 train_dataset = ResidueDataset(os.path.join(args.dataset_path, 'train'))
@@ -118,10 +124,12 @@ class EGNNForResidueIdentity(nn.Module):
         )
         
     def forward(self, h, x, edges):
+        # Process single environment
         h, x = self.egnn(h, x, edges)
         # Global average pooling over nodes
         h = torch.mean(h, dim=0)
-        return self.mlp(h)
+        # Return logits for amino acid prediction
+        return self.mlp(h).unsqueeze(0)  # Add batch dimension
 
 model = EGNNForResidueIdentity(
     in_node_nf=5,  # Number of atom types
@@ -134,28 +142,41 @@ model = EGNNForResidueIdentity(
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
 criterion = nn.CrossEntropyLoss()
 
-# Training loop
 def train(epoch):
     model.train()
     total_loss = 0
     correct = 0
     total = 0
     
-    for batch_idx, (pos, feat, labels) in enumerate(train_loader):
-        pos, feat, labels = pos.to(args.device), feat.to(args.device), labels.to(args.device)
+    for batch_idx, (pos_list, feat_list, labels) in enumerate(train_loader):
+        # Process each residue environment separately
+        batch_outputs = []
+        labels = labels.to(args.device)
         
-        # Create edges - fully connected graph
-        edges = torch.combinations(torch.arange(pos.size(0)), 2).t()
-        edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+        for pos, feat in zip(pos_list, feat_list):
+            pos = pos.to(args.device)
+            feat = feat.to(args.device)
+            
+            # Create edges for this single environment
+            n_atoms = pos.size(0)
+            edges = torch.combinations(torch.arange(n_atoms), 2).t()
+            edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+            
+            # Forward pass for this environment
+            output = model(feat.unsqueeze(0), pos.unsqueeze(0), edges)
+            batch_outputs.append(output)
+            
+        # Combine outputs
+        batch_output = torch.cat(batch_outputs, dim=0)
         
+        # Calculate loss and backprop
         optimizer.zero_grad()
-        output = model(feat, pos, edges)
-        loss = criterion(output, labels)
+        loss = criterion(batch_output, labels)
         loss.backward()
         optimizer.step()
         
         total_loss += loss.item()
-        pred = output.argmax(dim=1)
+        pred = batch_output.argmax(dim=1)
         correct += pred.eq(labels).sum().item()
         total += labels.size(0)
         
@@ -169,16 +190,26 @@ def test(loader):
     total = 0
     
     with torch.no_grad():
-        for pos, feat, labels in loader:
-            pos, feat, labels = pos.to(args.device), feat.to(args.device), labels.to(args.device)
-            edges = torch.combinations(torch.arange(pos.size(0)), 2).t()
-            edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+        for pos_list, feat_list, labels in loader:
+            batch_outputs = []
+            labels = labels.to(args.device)
             
-            output = model(feat, pos, edges)
-            loss = criterion(output, labels)
+            for pos, feat in zip(pos_list, feat_list):
+                pos = pos.to(args.device)
+                feat = feat.to(args.device)
+                
+                n_atoms = pos.size(0)
+                edges = torch.combinations(torch.arange(n_atoms), 2).t()
+                edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+                
+                output = model(feat.unsqueeze(0), pos.unsqueeze(0), edges)
+                batch_outputs.append(output)
+            
+            batch_output = torch.cat(batch_outputs, dim=0)
+            loss = criterion(batch_output, labels)
             
             total_loss += loss.item()
-            pred = output.argmax(dim=1)
+            pred = batch_output.argmax(dim=1)
             correct += pred.eq(labels).sum().item()
             total += labels.size(0)
             
