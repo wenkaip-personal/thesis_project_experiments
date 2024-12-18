@@ -181,37 +181,62 @@ def train(epoch):
     total = 0
     
     for batch_idx, (pos_list, feat_list, labels) in enumerate(train_loader):
-        # Process each residue environment separately
-        batch_outputs = []
-        labels = labels.to(args.device)
-        
-        for pos, feat in zip(pos_list, feat_list):
-            pos = pos.to(args.device)
-            feat = feat.to(args.device)
+        # Process each chunk of environments
+        chunk_size = 4  # Process 4 environments at a time
+        for i in range(0, len(pos_list), chunk_size):
+            # Get chunk of data
+            chunk_pos = pos_list[i:i+chunk_size]
+            chunk_feat = feat_list[i:i+chunk_size] 
+            chunk_labels = labels[i:i+chunk_size].to(args.device)
             
-            # Create edges with radius cutoff instead of all pairs
-            edges = create_edges_with_radius_cutoff(pos).to(args.device)
+            # Initialize outputs list for this chunk
+            chunk_outputs = []
             
-            # Forward pass for this environment
-            output = model(feat, pos, edges)
-            batch_outputs.append(output)
+            # Process each environment in the chunk
+            for pos, feat in zip(chunk_pos, chunk_feat):
+                pos = pos.to(args.device)
+                feat = feat.to(args.device)
+                
+                # Create edges for this environment
+                edges = create_edges_with_radius_cutoff(pos).to(args.device)
+                
+                # Get model output for this environment
+                output = model(feat, pos, edges)
+                chunk_outputs.append(output)
+                
+                # Clear some memory
+                torch.cuda.empty_cache()
             
-        # Combine outputs
-        batch_output = torch.cat(batch_outputs, dim=0)
-        
-        # Calculate loss and backprop
-        optimizer.zero_grad()
-        loss = criterion(batch_output, labels)
-        loss.backward()
-        optimizer.step()
-        
-        total_loss += loss.item()
-        pred = batch_output.argmax(dim=1)
-        correct += pred.eq(labels).sum().item()
-        total += labels.size(0)
-        
+            # Combine outputs from this chunk
+            chunk_output = torch.cat(chunk_outputs, dim=0)
+            
+            # Calculate loss for this chunk
+            optimizer.zero_grad()
+            loss = criterion(chunk_output, chunk_labels)
+            loss.backward()
+            optimizer.step()
+            
+            # Update metrics
+            total_loss += loss.item()
+            pred = chunk_output.argmax(dim=1)
+            correct += pred.eq(chunk_labels).sum().item()
+            total += chunk_labels.size(0)
+            
+            # Clear more memory
+            torch.cuda.empty_cache()
+            
+        # Print progress 
+        if batch_idx % 10 == 0:
+            current = batch_idx * args.batch_size
+            print(f'Train Epoch: {epoch} [{current}/{len(train_loader.dataset)} '
+                  f'({100. * current / len(train_loader.dataset):.0f}%)]\t'
+                  f'Loss: {loss.item():.6f}')
+    
+    # Calculate final metrics
+    avg_loss = total_loss / len(train_loader)
     acc = 100. * correct / total
-    return total_loss / len(train_loader), acc
+    
+    return avg_loss, acc
 
 def test(loader):
     model.eval()
@@ -221,29 +246,44 @@ def test(loader):
     
     with torch.no_grad():
         for pos_list, feat_list, labels in loader:
-            batch_outputs = []
-            labels = labels.to(args.device)
-            
-            for pos, feat in zip(pos_list, feat_list):
-                pos = pos.to(args.device)
-                feat = feat.to(args.device)
+            # Process in chunks
+            chunk_size = 4
+            for i in range(0, len(pos_list), chunk_size):
+                # Get chunk of data
+                chunk_pos = pos_list[i:i+chunk_size]
+                chunk_feat = feat_list[i:i+chunk_size]
+                chunk_labels = labels[i:i+chunk_size].to(args.device)
                 
-                # Create edges with radius cutoff instead of all pairs
-                edges = create_edges_with_radius_cutoff(pos).to(args.device)
+                chunk_outputs = []
                 
-                output = model(feat, pos, edges)
-                batch_outputs.append(output)
-            
-            batch_output = torch.cat(batch_outputs, dim=0)
-            loss = criterion(batch_output, labels)
-            
-            total_loss += loss.item()
-            pred = batch_output.argmax(dim=1)
-            correct += pred.eq(labels).sum().item()
-            total += labels.size(0)
-            
+                # Process each environment in chunk
+                for pos, feat in zip(chunk_pos, chunk_feat):
+                    pos = pos.to(args.device)
+                    feat = feat.to(args.device)
+                    
+                    edges = create_edges_with_radius_cutoff(pos).to(args.device)
+                    output = model(feat, pos, edges)
+                    chunk_outputs.append(output)
+                    
+                    torch.cuda.empty_cache()
+                
+                # Combine chunk outputs
+                chunk_output = torch.cat(chunk_outputs, dim=0)
+                
+                # Calculate loss
+                loss = criterion(chunk_output, chunk_labels)
+                
+                # Update metrics
+                total_loss += loss.item()
+                pred = chunk_output.argmax(dim=1)
+                correct += pred.eq(chunk_labels).sum().item()
+                total += chunk_labels.size(0)
+                
+                torch.cuda.empty_cache()
+    
+    avg_loss = total_loss / len(loader)
     acc = 100. * correct / total
-    return total_loss / len(loader), acc
+    return avg_loss, acc
 
 # Main training loop
 best_val_acc = 0
