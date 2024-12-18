@@ -165,7 +165,7 @@ def train(epoch):
             edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
             
             # Forward pass for this environment
-            output = model(feat.unsqueeze(0), pos.unsqueeze(0), edges)
+            output = model(feat, pos, edges)
             batch_outputs.append(output)
             
         # Combine outputs
@@ -204,7 +204,7 @@ def test(loader):
                 edges = torch.combinations(torch.arange(n_atoms), 2).t()
                 edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
                 
-                output = model(feat.unsqueeze(0), pos.unsqueeze(0), edges)
+                output = model(feat, pos, edges)
                 batch_outputs.append(output)
             
             batch_output = torch.cat(batch_outputs, dim=0)
