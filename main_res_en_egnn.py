@@ -2,13 +2,13 @@ import argparse
 import torch
 from torch import nn, optim
 import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+from torch_scatter import scatter_mean
 import json
 from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
 import numpy as np
 
-# Import our EGNN model
+# Import EGNN model
 from models.egnn.egnn_clean import EGNN
 
 parser = argparse.ArgumentParser()
@@ -29,12 +29,14 @@ os.makedirs(args.outf, exist_ok=True)
 os.makedirs(os.path.join(args.outf, args.exp_name), exist_ok=True)
 
 class ResidueDataset:
-    def __init__(self, lmdb_path):
+    def __init__(self, lmdb_path, max_atoms=1000):
         self.dataset = LMDBDataset(lmdb_path)
+        self.max_atoms = max_atoms
         self.amino_acids = ['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS',
                            'ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP',
                            'TYR','VAL']
         self.aa_to_idx = {aa: idx for idx, aa in enumerate(self.amino_acids)}
+        self.atom_types = ['C', 'N', 'O', 'S', 'P']
         
     def __len__(self):
         return len(self.dataset)
@@ -42,36 +44,32 @@ class ResidueDataset:
     def __getitem__(self, idx):
         data = self.dataset[idx]
         
-        # Get atom positions and features
         atoms_df = data['atoms']
         labels_df = data['labels']
         indices = data['subunit_indices']
         
-        # Process each residue environment
         pos_list = []
         feat_list = []
         label_list = []
         
         for i, (_, label_row) in enumerate(labels_df.iterrows()):
             env_indices = indices[i]
-            env_atoms = atoms_df.iloc[env_indices]
-
-            # Skip environments that are too large
-            if len(env_atoms) > 1000:  # Adjust threshold as needed
+            if len(env_indices) > self.max_atoms:
                 continue
+                
+            env_atoms = atoms_df.iloc[env_indices]
             
             # Get positions
             positions = env_atoms[['x','y','z']].values
             
-            # Create one-hot atom type features
+            # Create atom type features
             atom_types = env_atoms['element'].values
-            unique_atoms = ['C', 'N', 'O', 'S', 'P']
-            atom_features = np.zeros((len(atom_types), len(unique_atoms)))
+            atom_features = np.zeros((len(atom_types), len(self.atom_types)))
             for j, atype in enumerate(atom_types):
-                if atype in unique_atoms:
-                    atom_features[j, unique_atoms.index(atype)] = 1
-                    
-            # Get label - handle potential numeric labels
+                if atype in self.atom_types:
+                    atom_features[j, self.atom_types.index(atype)] = 1
+            
+            # Get label
             label = label_row['label']
             if isinstance(label, (int, np.integer)):
                 label = self.amino_acids[label]
@@ -84,235 +82,230 @@ class ResidueDataset:
         return pos_list, feat_list, label_list
 
 def collate_fn(batch):
-    # Instead of stacking tensors directly, we'll return them as lists
-    # Each item in these lists corresponds to one residue environment
-    all_pos, all_feat, all_labels = [], [], []
+    # Get total number of environments and max atoms
+    n_envs = sum(len(sample[0]) for sample in batch)
+    max_atoms = max(pos.size(0) for sample in batch for pos in sample[0])
     
-    # Unpack the nested batch structure 
+    # Pre-allocate tensors
+    pos_tensor = torch.zeros(n_envs, max_atoms, 3)
+    feat_tensor = torch.zeros(n_envs, max_atoms, 5)
+    mask_tensor = torch.zeros(n_envs, max_atoms, dtype=torch.bool)
+    labels = []
+    
+    # Fill tensors
+    idx = 0
     for sample in batch:
-        # Each sample contains lists of pos, feat, labels
-        pos_list, feat_list, labels_list = sample
-        
-        # Extend our lists with data for each residue environment
-        all_pos.extend([pos.to(torch.float32) for pos in pos_list])
-        all_feat.extend([feat.to(torch.float32) for feat in feat_list])
-        all_labels.extend(labels_list)
-        
-    # Return lists rather than stacked tensors
-    return all_pos, all_feat, torch.LongTensor(all_labels)
+        pos_list, feat_list, label_list = sample
+        for pos, feat, label in zip(pos_list, feat_list, label_list):
+            n_atoms = pos.size(0)
+            pos_tensor[idx, :n_atoms] = pos
+            feat_tensor[idx, :n_atoms] = feat
+            mask_tensor[idx, :n_atoms] = 1
+            labels.append(label)
+            idx += 1
+            
+    return pos_tensor, feat_tensor, mask_tensor, torch.LongTensor(labels)
 
-# Initialize datasets and dataloaders
-train_dataset = ResidueDataset(os.path.join(args.dataset_path, 'train'))
-val_dataset = ResidueDataset(os.path.join(args.dataset_path, 'val'))
-test_dataset = ResidueDataset(os.path.join(args.dataset_path, 'test'))
-
-train_loader = DataLoader(train_dataset, batch_size=args.batch_size, 
-                         shuffle=True, collate_fn=collate_fn)
-val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                       shuffle=False, collate_fn=collate_fn)
-test_loader = DataLoader(test_dataset, batch_size=args.batch_size,
-                        shuffle=False, collate_fn=collate_fn)
-
-# Initialize model
 class EGNNForResidueIdentity(nn.Module):
     def __init__(self, in_node_nf, hidden_nf, out_node_nf, n_layers, attention):
         super().__init__()
-        self.egnn = EGNN(in_node_nf=in_node_nf, 
+        self.egnn = EGNN(in_node_nf=in_node_nf,
                         hidden_nf=hidden_nf,
                         out_node_nf=hidden_nf,
                         n_layers=n_layers,
                         attention=attention)
+                        
         self.mlp = nn.Sequential(
             nn.Linear(hidden_nf, hidden_nf),
             nn.ReLU(),
             nn.Linear(hidden_nf, out_node_nf)
         )
         
-    def forward(self, h, x, edges):
-        # Process single environment
-        # Add edge attributes (None since we don't have any special edge features)
-        edge_attr = None
-        h, x = self.egnn(h, x, edges, edge_attr)  # Add edge_attr argument
-        # Global average pooling over nodes 
-        h = torch.mean(h, dim=0)
-        # Return logits for amino acid prediction
-        return self.mlp(h).unsqueeze(0)  # Add batch dimension
+    def forward(self, h, x, edges, batch):
+        # Process through EGNN
+        h, x = self.egnn(h, x, edges, edge_attr=None)
+        
+        # Global pool per environment using batch indices
+        h_pool = scatter_mean(h, batch, dim=0)
+        
+        # Final classification
+        return self.mlp(h_pool)
 
-model = EGNNForResidueIdentity(
-    in_node_nf=5,  # Number of atom types
-    hidden_nf=args.nf,
-    out_node_nf=20,  # Number of amino acid classes
-    n_layers=args.n_layers,
-    attention=args.attention
-).to(args.device)
+def create_edges_batch(pos_tensor, mask_tensor, cutoff=10.0):
+    """
+    Creates edges for batch of environments efficiently
+    Args:
+        pos_tensor: [B, N, 3] tensor of positions
+        mask_tensor: [B, N] boolean mask of valid atoms 
+        cutoff: Distance cutoff for edges
+    Returns:
+        edges: [2, E] tensor of edges
+        batch: [E] tensor assigning edges to environments
+    """
+    B, N = pos_tensor.shape[:2]
+    device = pos_tensor.device
+    
+    # Create indices for all pairs within cutoff
+    rows, cols = torch.triu_indices(N, N, 1, device=device)
+    rows = rows.repeat(B)
+    cols = cols.repeat(B)
+    batch = torch.arange(B, device=device).repeat_interleave(rows.size(0)//B)
+    
+    # Calculate pairwise distances
+    distances = torch.norm(
+        pos_tensor[batch, rows] - pos_tensor[batch, cols],
+        dim=-1
+    )
+    
+    # Filter edges by cutoff and mask
+    valid = (distances < cutoff) & \
+            mask_tensor[batch, rows] & \
+            mask_tensor[batch, cols]
+            
+    rows = rows[valid]
+    cols = cols[valid]
+    batch = batch[valid]
+    
+    # Create bidirectional edges
+    edges = torch.stack([
+        torch.cat([rows, cols]),
+        torch.cat([cols, rows])
+    ])
+    batch = torch.cat([batch, batch])
+    
+    return edges, batch
 
-def create_edges_with_radius_cutoff(pos, cutoff=10.0):
-    # Ensure pos is on CPU for the initial computations
-    pos_cpu = pos.cpu()
-    n_atoms = pos_cpu.size(0)
-    
-    # Get all pairs of indices
-    rows, cols = torch.combinations(torch.arange(n_atoms), 2).t()
-    
-    # Calculate distances using CPU tensors
-    distances = torch.norm(pos_cpu[rows] - pos_cpu[cols], dim=1)
-    
-    # Create mask and filter
-    mask = distances < cutoff
-    rows = rows[mask]
-    cols = cols[mask]
-    
-    # Add reverse edges
-    edges = torch.cat([
-        torch.stack([rows, cols]),
-        torch.stack([cols, rows])
-    ], dim=1)
-    
-    # Move final result to same device as input pos
-    return edges.to(pos.device)
-
-optimizer = optim.Adam(model.parameters(), lr=args.lr)
-criterion = nn.CrossEntropyLoss()
-
-def train(epoch):
+def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss = 0
     correct = 0
     total = 0
     
-    for batch_idx, (pos_list, feat_list, labels) in enumerate(train_loader):
-        # Process each chunk of environments
-        chunk_size = 4  # Process 4 environments at a time
-        for i in range(0, len(pos_list), chunk_size):
-            # Get chunk of data
-            chunk_pos = pos_list[i:i+chunk_size]
-            chunk_feat = feat_list[i:i+chunk_size] 
-            chunk_labels = labels[i:i+chunk_size].to(args.device)
-            
-            # Initialize outputs list for this chunk
-            chunk_outputs = []
-            
-            # Process each environment in the chunk
-            for pos, feat in zip(chunk_pos, chunk_feat):
-                pos = pos.to(args.device)
-                feat = feat.to(args.device)
-                
-                # Create edges for this environment
-                edges = create_edges_with_radius_cutoff(pos).to(args.device)
-                
-                # Get model output for this environment
-                output = model(feat, pos, edges)
-                chunk_outputs.append(output)
-                
-                # Clear some memory
-                torch.cuda.empty_cache()
-            
-            # Combine outputs from this chunk
-            chunk_output = torch.cat(chunk_outputs, dim=0)
-            
-            # Calculate loss for this chunk
-            optimizer.zero_grad()
-            loss = criterion(chunk_output, chunk_labels)
-            loss.backward()
-            optimizer.step()
-            
-            # Update metrics
-            total_loss += loss.item()
-            pred = chunk_output.argmax(dim=1)
-            correct += pred.eq(chunk_labels).sum().item()
-            total += chunk_labels.size(0)
-            
-            # Clear more memory
-            torch.cuda.empty_cache()
-            
-        # Print progress 
-        if batch_idx % 10 == 0:
-            current = batch_idx * args.batch_size
-            print(f'Train Epoch: {epoch} [{current}/{len(train_loader.dataset)} '
-                  f'({100. * current / len(train_loader.dataset):.0f}%)]\t'
-                  f'Loss: {loss.item():.6f}')
-    
-    # Calculate final metrics
-    avg_loss = total_loss / len(train_loader)
-    acc = 100. * correct / total
-    
-    return avg_loss, acc
+    for pos, feat, mask, labels in loader:
+        # Move to device
+        pos = pos.to(device)
+        feat = feat.to(device)
+        mask = mask.to(device)
+        labels = labels.to(device)
+        
+        # Create edges
+        edges, batch = create_edges_batch(pos, mask)
+        
+        # Forward pass
+        optimizer.zero_grad()
+        output = model(feat, pos, edges, batch)
+        loss = criterion(output, labels)
+        
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+        
+        # Update metrics
+        total_loss += loss.item() * len(labels)
+        pred = output.argmax(dim=1)
+        correct += pred.eq(labels).sum().item()
+        total += len(labels)
+        
+    return total_loss / total, 100. * correct / total
 
-def test(loader):
+@torch.no_grad()
+def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss = 0
     correct = 0
     total = 0
     
-    with torch.no_grad():
-        for pos_list, feat_list, labels in loader:
-            # Process in chunks
-            chunk_size = 4
-            for i in range(0, len(pos_list), chunk_size):
-                # Get chunk of data
-                chunk_pos = pos_list[i:i+chunk_size]
-                chunk_feat = feat_list[i:i+chunk_size]
-                chunk_labels = labels[i:i+chunk_size].to(args.device)
-                
-                chunk_outputs = []
-                
-                # Process each environment in chunk
-                for pos, feat in zip(chunk_pos, chunk_feat):
-                    pos = pos.to(args.device)
-                    feat = feat.to(args.device)
-                    
-                    edges = create_edges_with_radius_cutoff(pos).to(args.device)
-                    output = model(feat, pos, edges)
-                    chunk_outputs.append(output)
-                    
-                    torch.cuda.empty_cache()
-                
-                # Combine chunk outputs
-                chunk_output = torch.cat(chunk_outputs, dim=0)
-                
-                # Calculate loss
-                loss = criterion(chunk_output, chunk_labels)
-                
-                # Update metrics
-                total_loss += loss.item()
-                pred = chunk_output.argmax(dim=1)
-                correct += pred.eq(chunk_labels).sum().item()
-                total += chunk_labels.size(0)
-                
-                torch.cuda.empty_cache()
-    
-    avg_loss = total_loss / len(loader)
-    acc = 100. * correct / total
-    return avg_loss, acc
-
-# Main training loop
-best_val_acc = 0
-results = {'train_loss': [], 'train_acc': [], 
-           'val_loss': [], 'val_acc': [],
-           'test_loss': [], 'test_acc': []}
-
-for epoch in range(args.epochs):
-    train_loss, train_acc = train(epoch)
-    val_loss, val_acc = test(val_loader)
-    test_loss, test_acc = test(test_loader)
-    
-    results['train_loss'].append(train_loss)
-    results['train_acc'].append(train_acc)
-    results['val_loss'].append(val_loss)
-    results['val_acc'].append(val_acc)
-    results['test_loss'].append(test_loss)
-    results['test_acc'].append(test_acc)
-    
-    print(f'Epoch {epoch}:')
-    print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
-    print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
-    print(f'Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%')
-    
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(),
-                  os.path.join(args.outf, args.exp_name, 'best_model.pt'))
+    for pos, feat, mask, labels in loader:
+        # Move to device
+        pos = pos.to(device)
+        feat = feat.to(device)
+        mask = mask.to(device)
+        labels = labels.to(device)
         
-    # Save results
-    with open(os.path.join(args.outf, args.exp_name, 'results.json'), 'w') as f:
-        json.dump(results, f)
+        # Create edges
+        edges, batch = create_edges_batch(pos, mask)
+        
+        # Forward pass
+        output = model(feat, pos, edges, batch)
+        loss = criterion(output, labels)
+        
+        # Update metrics
+        total_loss += loss.item() * len(labels)
+        pred = output.argmax(dim=1)
+        correct += pred.eq(labels).sum().item()
+        total += len(labels)
+        
+    return total_loss / total, 100. * correct / total
+
+def main():
+    # Initialize datasets
+    train_dataset = ResidueDataset(os.path.join(args.dataset_path, 'train'))
+    val_dataset = ResidueDataset(os.path.join(args.dataset_path, 'val'))
+    test_dataset = ResidueDataset(os.path.join(args.dataset_path, 'test'))
+
+    # Create dataloaders
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
+                            shuffle=True, collate_fn=collate_fn, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
+                          shuffle=False, collate_fn=collate_fn, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size,
+                           shuffle=False, collate_fn=collate_fn, num_workers=4)
+
+    # Initialize model
+    model = EGNNForResidueIdentity(
+        in_node_nf=5,  # Number of atom types
+        hidden_nf=args.nf,
+        out_node_nf=20,  # Number of amino acid classes
+        n_layers=args.n_layers,
+        attention=args.attention
+    ).to(args.device)
+
+    # Setup training
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    criterion = nn.CrossEntropyLoss()
+    
+    # Training loop
+    best_val_acc = 0
+    results = {
+        'train_loss': [], 'train_acc': [],
+        'val_loss': [], 'val_acc': [],
+        'test_loss': [], 'test_acc': []
+    }
+    
+    for epoch in range(args.epochs):
+        # Train
+        train_loss, train_acc = train_epoch(
+            model, train_loader, optimizer, criterion, args.device)
+            
+        # Evaluate
+        val_loss, val_acc = evaluate(
+            model, val_loader, criterion, args.device)
+        test_loss, test_acc = evaluate(
+            model, test_loader, criterion, args.device)
+            
+        # Save results
+        results['train_loss'].append(train_loss)
+        results['train_acc'].append(train_acc)
+        results['val_loss'].append(val_loss)
+        results['val_acc'].append(val_acc)
+        results['test_loss'].append(test_loss)
+        results['test_acc'].append(test_acc)
+        
+        # Print progress
+        print(f'Epoch {epoch}:')
+        print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
+        print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
+        print(f'Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.2f}%')
+        
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(),
+                      os.path.join(args.outf, args.exp_name, 'best_model.pt'))
+            
+        # Save results
+        with open(os.path.join(args.outf, args.exp_name, 'results.json'), 'w') as f:
+            json.dump(results, f)
+
+if __name__ == '__main__':
+    main()
