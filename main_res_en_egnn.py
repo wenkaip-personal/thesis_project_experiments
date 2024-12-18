@@ -2,6 +2,7 @@ import argparse
 import torch
 from torch import nn, optim
 import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import json
 from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
@@ -54,6 +55,10 @@ class ResidueDataset:
         for i, (_, label_row) in enumerate(labels_df.iterrows()):
             env_indices = indices[i]
             env_atoms = atoms_df.iloc[env_indices]
+
+            # Skip environments that are too large
+            if len(env_atoms) > 1000:  # Adjust threshold as needed
+                continue
             
             # Get positions
             positions = env_atoms[['x','y','z']].values
