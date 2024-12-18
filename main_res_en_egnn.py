@@ -125,8 +125,10 @@ class EGNNForResidueIdentity(nn.Module):
         
     def forward(self, h, x, edges):
         # Process single environment
-        h, x = self.egnn(h, x, edges)
-        # Global average pooling over nodes
+        # Add edge attributes (None since we don't have any special edge features)
+        edge_attr = None
+        h, x = self.egnn(h, x, edges, edge_attr)  # Add edge_attr argument
+        # Global average pooling over nodes 
         h = torch.mean(h, dim=0)
         # Return logits for amino acid prediction
         return self.mlp(h).unsqueeze(0)  # Add batch dimension
