@@ -12,7 +12,7 @@ from models.egnn.egnn_clean import EGNN
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--exp_name', type=str, default='exp_1', help='Experiment name')
-parser.add_argument('--batch_size', type=int, default=32)
+parser.add_argument('--batch_size', type=int, default=8)
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--nf', type=int, default=128, help='Number of features')
