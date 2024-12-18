@@ -142,14 +142,17 @@ model = EGNNForResidueIdentity(
 ).to(args.device)
 
 def create_edges_with_radius_cutoff(pos, cutoff=10.0):
-    n_atoms = pos.size(0)
+    # Ensure pos is on CPU for the initial computations
+    pos_cpu = pos.cpu()
+    n_atoms = pos_cpu.size(0)
+    
     # Get all pairs of indices
     rows, cols = torch.combinations(torch.arange(n_atoms), 2).t()
     
-    # Calculate distances
-    distances = torch.norm(pos[rows] - pos[cols], dim=1)
+    # Calculate distances using CPU tensors
+    distances = torch.norm(pos_cpu[rows] - pos_cpu[cols], dim=1)
     
-    # Only keep edges within cutoff
+    # Create mask and filter
     mask = distances < cutoff
     rows = rows[mask]
     cols = cols[mask]
@@ -160,7 +163,8 @@ def create_edges_with_radius_cutoff(pos, cutoff=10.0):
         torch.stack([cols, rows])
     ], dim=1)
     
-    return edges
+    # Move final result to same device as input pos
+    return edges.to(pos.device)
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
 criterion = nn.CrossEntropyLoss()
