@@ -141,6 +141,27 @@ model = EGNNForResidueIdentity(
     attention=args.attention
 ).to(args.device)
 
+def create_edges_with_radius_cutoff(pos, cutoff=10.0):
+    n_atoms = pos.size(0)
+    # Get all pairs of indices
+    rows, cols = torch.combinations(torch.arange(n_atoms), 2).t()
+    
+    # Calculate distances
+    distances = torch.norm(pos[rows] - pos[cols], dim=1)
+    
+    # Only keep edges within cutoff
+    mask = distances < cutoff
+    rows = rows[mask]
+    cols = cols[mask]
+    
+    # Add reverse edges
+    edges = torch.cat([
+        torch.stack([rows, cols]),
+        torch.stack([cols, rows])
+    ], dim=1)
+    
+    return edges
+
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
 criterion = nn.CrossEntropyLoss()
 
@@ -159,10 +180,8 @@ def train(epoch):
             pos = pos.to(args.device)
             feat = feat.to(args.device)
             
-            # Create edges for this single environment
-            n_atoms = pos.size(0)
-            edges = torch.combinations(torch.arange(n_atoms), 2).t()
-            edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+            # Create edges with radius cutoff instead of all pairs
+            edges = create_edges_with_radius_cutoff(pos).to(args.device)
             
             # Forward pass for this environment
             output = model(feat, pos, edges)
@@ -200,9 +219,8 @@ def test(loader):
                 pos = pos.to(args.device)
                 feat = feat.to(args.device)
                 
-                n_atoms = pos.size(0)
-                edges = torch.combinations(torch.arange(n_atoms), 2).t()
-                edges = torch.cat([edges, edges.flip(0)], dim=1).to(args.device)
+                # Create edges with radius cutoff instead of all pairs
+                edges = create_edges_with_radius_cutoff(pos).to(args.device)
                 
                 output = model(feat, pos, edges)
                 batch_outputs.append(output)
