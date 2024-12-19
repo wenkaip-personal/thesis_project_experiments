@@ -8,25 +8,8 @@ from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
 import numpy as np
 
-# Import EGNN model
-from models.egnn.egnn_clean import EGNN
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--exp_name', type=str, default='exp_1', help='Experiment name')
-parser.add_argument('--batch_size', type=int, default=8)
-parser.add_argument('--epochs', type=int, default=100)
-parser.add_argument('--lr', type=float, default=1e-4)
-parser.add_argument('--nf', type=int, default=128, help='Number of features')
-parser.add_argument('--n_layers', type=int, default=7)
-parser.add_argument('--attention', type=int, default=1)
-parser.add_argument('--dataset_path', type=str, required=True)
-parser.add_argument('--outf', type=str, default='res_outputs')
-parser.add_argument('--device', type=str, default='cuda')
-args = parser.parse_args()
-
-# Create output directory
-os.makedirs(args.outf, exist_ok=True)
-os.makedirs(os.path.join(args.outf, args.exp_name), exist_ok=True)
+# Import EGNN directly from egnn_clean
+from models.egnn.egnn_clean import EGNN, get_edges_batch
 
 class ResidueDataset:
     def __init__(self, lmdb_path, max_atoms=1000):
@@ -43,15 +26,12 @@ class ResidueDataset:
         
     def __getitem__(self, idx):
         data = self.dataset[idx]
-        
         atoms_df = data['atoms']
-        labels_df = data['labels']
+        labels_df = data['labels'] 
         indices = data['subunit_indices']
         
-        pos_list = []
-        feat_list = []
-        label_list = []
-        
+        # Process each environment
+        envs = []
         for i, (_, label_row) in enumerate(labels_df.iterrows()):
             env_indices = indices[i]
             if len(env_indices) > self.max_atoms:
@@ -59,58 +39,53 @@ class ResidueDataset:
                 
             env_atoms = atoms_df.iloc[env_indices]
             
-            # Get positions
-            positions = env_atoms[['x','y','z']].values
-            
-            # Create atom type features
-            atom_types = env_atoms['element'].values
-            atom_features = np.zeros((len(atom_types), len(self.atom_types)))
-            for j, atype in enumerate(atom_types):
+            # Get positions and atom type features
+            positions = torch.FloatTensor(env_atoms[['x','y','z']].values)
+            atom_features = torch.zeros((len(env_indices), len(self.atom_types)))
+            for j, atype in enumerate(env_atoms['element']):
                 if atype in self.atom_types:
                     atom_features[j, self.atom_types.index(atype)] = 1
-            
+                    
             # Get label
-            label = label_row['label']
-            if isinstance(label, (int, np.integer)):
-                label = self.amino_acids[label]
-            label_idx = self.aa_to_idx[label]
+            label = self.aa_to_idx[label_row['label'] if isinstance(label_row['label'], str) 
+                                 else self.amino_acids[label_row['label']]]
             
-            pos_list.append(torch.FloatTensor(positions))
-            feat_list.append(torch.FloatTensor(atom_features))
-            label_list.append(label_idx)
+            envs.append((positions, atom_features, label))
             
-        return pos_list, feat_list, label_list
+        return envs
 
 def collate_fn(batch):
-    # Get total number of environments and max atoms
-    n_envs = sum(len(sample[0]) for sample in batch)
-    max_atoms = max(pos.size(0) for sample in batch for pos in sample[0])
+    # Flatten batch of environments
+    envs = [env for sample in batch for env in sample]
+    if not envs:
+        return None
     
-    # Pre-allocate tensors
-    pos_tensor = torch.zeros(n_envs, max_atoms, 3)
-    feat_tensor = torch.zeros(n_envs, max_atoms, 5)
-    mask_tensor = torch.zeros(n_envs, max_atoms, dtype=torch.bool)
-    labels = []
+    # Get dimensions
+    n_envs = len(envs)
+    max_atoms = max(env[0].size(0) for env in envs)
+    
+    # Initialize tensors
+    pos = torch.zeros(n_envs, max_atoms, 3)
+    feat = torch.zeros(n_envs, max_atoms, len(envs[0][1][0]))
+    mask = torch.zeros(n_envs, max_atoms, dtype=torch.bool)
+    labels = torch.LongTensor([env[2] for env in envs])
     
     # Fill tensors
-    idx = 0
-    for sample in batch:
-        pos_list, feat_list, label_list = sample
-        for pos, feat, label in zip(pos_list, feat_list, label_list):
-            n_atoms = pos.size(0)
-            pos_tensor[idx, :n_atoms] = pos
-            feat_tensor[idx, :n_atoms] = feat
-            mask_tensor[idx, :n_atoms] = 1
-            labels.append(label)
-            idx += 1
-            
-    return pos_tensor, feat_tensor, mask_tensor, torch.LongTensor(labels)
+    for i, (pos_i, feat_i, _) in enumerate(envs):
+        n_atoms = pos_i.size(0)
+        pos[i, :n_atoms] = pos_i
+        feat[i, :n_atoms] = feat_i
+        mask[i, :n_atoms] = 1
+        
+    return pos, feat, mask, labels
 
-class EGNNForResidueIdentity(nn.Module):
+class EGNNResidueClassifier(nn.Module):
     def __init__(self, in_node_nf, hidden_nf, out_node_nf, n_layers, attention):
         super().__init__()
+        
+        # Use EGNN from egnn_clean directly
         self.egnn = EGNN(in_node_nf=in_node_nf,
-                        hidden_nf=hidden_nf,
+                        hidden_nf=hidden_nf, 
                         out_node_nf=hidden_nf,
                         n_layers=n_layers,
                         attention=attention)
@@ -121,59 +96,16 @@ class EGNNForResidueIdentity(nn.Module):
             nn.Linear(hidden_nf, out_node_nf)
         )
         
-    def forward(self, h, x, edges, batch):
+    def forward(self, h, x, batch_size):
+        # Get edges using utility function from egnn_clean
+        edges, edge_attr = get_edges_batch(x.size(1), batch_size)
+        
         # Process through EGNN
-        h, x = self.egnn(h, x, edges, edge_attr=None)
+        h_out, x_out = self.egnn(h, x, edges, edge_attr)
         
-        # Global pool per environment using batch indices
-        h_pool = scatter_mean(h, batch, dim=0)
-        
-        # Final classification
+        # Global pool and classify
+        h_pool = scatter_mean(h_out, batch=torch.arange(batch_size).repeat_interleave(x.size(1)), dim=0)
         return self.mlp(h_pool)
-
-def create_edges_batch(pos_tensor, mask_tensor, cutoff=10.0):
-    """
-    Creates edges for batch of environments efficiently
-    Args:
-        pos_tensor: [B, N, 3] tensor of positions
-        mask_tensor: [B, N] boolean mask of valid atoms 
-        cutoff: Distance cutoff for edges
-    Returns:
-        edges: [2, E] tensor of edges
-        batch: [E] tensor assigning edges to environments
-    """
-    B, N = pos_tensor.shape[:2]
-    device = pos_tensor.device
-    
-    # Create indices for all pairs within cutoff
-    rows, cols = torch.triu_indices(N, N, 1, device=device)
-    rows = rows.repeat(B)
-    cols = cols.repeat(B)
-    batch = torch.arange(B, device=device).repeat_interleave(rows.size(0)//B)
-    
-    # Calculate pairwise distances
-    distances = torch.norm(
-        pos_tensor[batch, rows] - pos_tensor[batch, cols],
-        dim=-1
-    )
-    
-    # Filter edges by cutoff and mask
-    valid = (distances < cutoff) & \
-            mask_tensor[batch, rows] & \
-            mask_tensor[batch, cols]
-            
-    rows = rows[valid]
-    cols = cols[valid]
-    batch = batch[valid]
-    
-    # Create bidirectional edges
-    edges = torch.stack([
-        torch.cat([rows, cols]),
-        torch.cat([cols, rows])
-    ])
-    batch = torch.cat([batch, batch])
-    
-    return edges, batch
 
 def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
@@ -182,18 +114,18 @@ def train_epoch(model, loader, optimizer, criterion, device):
     total = 0
     
     for pos, feat, mask, labels in loader:
-        # Move to device
+        # Skip empty batches
+        if pos is None:
+            continue
+            
+        # Move to device  
         pos = pos.to(device)
         feat = feat.to(device)
-        mask = mask.to(device)
         labels = labels.to(device)
-        
-        # Create edges
-        edges, batch = create_edges_batch(pos, mask)
         
         # Forward pass
         optimizer.zero_grad()
-        output = model(feat, pos, edges, batch)
+        output = model(feat, pos, pos.size(0))
         loss = criterion(output, labels)
         
         # Backward pass
@@ -212,24 +144,20 @@ def train_epoch(model, loader, optimizer, criterion, device):
 def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss = 0
-    correct = 0
+    correct = 0 
     total = 0
     
     for pos, feat, mask, labels in loader:
-        # Move to device
+        if pos is None:
+            continue
+            
         pos = pos.to(device)
-        feat = feat.to(device)
-        mask = mask.to(device)
+        feat = feat.to(device) 
         labels = labels.to(device)
         
-        # Create edges
-        edges, batch = create_edges_batch(pos, mask)
-        
-        # Forward pass
-        output = model(feat, pos, edges, batch)
+        output = model(feat, pos, pos.size(0))
         loss = criterion(output, labels)
         
-        # Update metrics
         total_loss += loss.item() * len(labels)
         pred = output.argmax(dim=1)
         correct += pred.eq(labels).sum().item()
@@ -237,8 +165,8 @@ def evaluate(model, loader, criterion, device):
         
     return total_loss / total, 100. * correct / total
 
-def main():
-    # Initialize datasets
+def main(args):
+    # Create datasets
     train_dataset = ResidueDataset(os.path.join(args.dataset_path, 'train'))
     val_dataset = ResidueDataset(os.path.join(args.dataset_path, 'val'))
     test_dataset = ResidueDataset(os.path.join(args.dataset_path, 'test'))
@@ -246,14 +174,14 @@ def main():
     # Create dataloaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
                             shuffle=True, collate_fn=collate_fn, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, 
                           shuffle=False, collate_fn=collate_fn, num_workers=4)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size,
                            shuffle=False, collate_fn=collate_fn, num_workers=4)
 
     # Initialize model
-    model = EGNNForResidueIdentity(
-        in_node_nf=5,  # Number of atom types
+    model = EGNNResidueClassifier(
+        in_node_nf=5,  # Number of atom types 
         hidden_nf=args.nf,
         out_node_nf=20,  # Number of amino acid classes
         n_layers=args.n_layers,
@@ -274,24 +202,20 @@ def main():
     
     for epoch in range(args.epochs):
         # Train
-        train_loss, train_acc = train_epoch(
-            model, train_loader, optimizer, criterion, args.device)
+        train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, args.device)
             
         # Evaluate
-        val_loss, val_acc = evaluate(
-            model, val_loader, criterion, args.device)
-        test_loss, test_acc = evaluate(
-            model, test_loader, criterion, args.device)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, args.device)
+        test_loss, test_acc = evaluate(model, test_loader, criterion, args.device)
             
         # Save results
         results['train_loss'].append(train_loss)
         results['train_acc'].append(train_acc)
-        results['val_loss'].append(val_loss)
+        results['val_loss'].append(val_loss) 
         results['val_acc'].append(val_acc)
         results['test_loss'].append(test_loss)
         results['test_acc'].append(test_acc)
         
-        # Print progress
         print(f'Epoch {epoch}:')
         print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
         print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
@@ -308,4 +232,21 @@ def main():
             json.dump(results, f)
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--exp_name', type=str, default='exp_1')
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--epochs', type=int, default=100) 
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--nf', type=int, default=128)
+    parser.add_argument('--n_layers', type=int, default=7)
+    parser.add_argument('--attention', type=int, default=1)
+    parser.add_argument('--dataset_path', type=str, required=True)
+    parser.add_argument('--outf', type=str, default='res_outputs')
+    parser.add_argument('--device', type=str, default='cuda')
+    args = parser.parse_args()
+
+    # Create output directory
+    os.makedirs(args.outf, exist_ok=True)
+    os.makedirs(os.path.join(args.outf, args.exp_name), exist_ok=True)
+
+    main(args)
