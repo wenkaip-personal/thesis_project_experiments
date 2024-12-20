@@ -83,6 +83,9 @@ class EnTransformerResidueClassifier(nn.Module):
     def __init__(self, dim, depth, num_tokens=None, dim_head=64, heads=8, neighbors=0, checkpoint=False):
         super().__init__()
         
+        # Add input embedding layer to project from atom features to model dimension
+        self.input_embedding = nn.Linear(5, dim)  # 5 is number of atom types
+        
         self.transformer = EnTransformer(
             dim=dim,
             depth=depth,
@@ -100,6 +103,9 @@ class EnTransformerResidueClassifier(nn.Module):
         )
         
     def forward(self, feat, coors, mask=None):
+        # Project input features to model dimension
+        feat = self.input_embedding(feat)
+        
         # Process through transformer
         feat_out, _ = self.transformer(feat, coors, mask=mask)
         
