@@ -7,8 +7,9 @@ from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
 
 class ResidueDataset:
-    def __init__(self, lmdb_path):
+    def __init__(self, lmdb_path, max_atoms=128):
         self.dataset = LMDBDataset(lmdb_path)
+        self.max_atoms = max_atoms
         self.amino_acids = ['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS',
                            'ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP',
                            'TYR','VAL']
@@ -27,6 +28,9 @@ class ResidueDataset:
         envs = []
         for i, (_, label_row) in enumerate(labels_df.iterrows()):
             env_indices = indices[i]
+            if len(env_indices) > self.max_atoms:
+                continue
+                
             env_atoms = atoms_df.iloc[env_indices]
             positions = torch.FloatTensor(env_atoms[['x','y','z']].values)
             atom_features = torch.zeros((len(env_indices), len(self.atom_types)))
