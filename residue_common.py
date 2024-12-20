@@ -17,6 +17,9 @@ class ResidueDataset:
                            'TYR','VAL']
         self.aa_to_idx = {aa: idx for idx, aa in enumerate(self.amino_acids)}
 
+    def __len__(self):
+        return len(self.dataset)  # Return length of underlying ATOM3D dataset
+
     def get_residue_features(self, atoms_df, residue_indices):
         # Calculate residue center (using CA atom or mean of all atoms)
         residue_pos = atoms_df.iloc[residue_indices][['x','y','z']].mean().values
