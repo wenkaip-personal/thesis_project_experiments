@@ -23,8 +23,14 @@ class EGNNResidueClassifier(nn.Module):
         )
     
     def forward(self, h, x, edge_index):
-        # Convert edge_index to format expected by EGNN
-        edges = edge_index.t().contiguous()
+        # Convert edge_index to row, col format
+        if edge_index.dim() == 2:
+            row, col = edge_index[:, 0], edge_index[:, 1]
+        else:
+            row, col = edge_index
+        
+        # Create edge_index in format [2, num_edges]
+        edges = torch.stack([row, col], dim=0)
         edge_attr = torch.ones(edges.size(1), 1).to(edges.device)
         
         h_out, x_out = self.egnn(h, x, edges, edge_attr)

@@ -35,17 +35,23 @@ class ResidueDataset:
         if self.use_knn:
             # Use KNN
             dists = torch.cdist(positions, positions)
-            _, neighbor_idx = dists.topk(k=min(self.k_neighbors, len(positions)-1), 
-                                       dim=-1, largest=False)
-            neighbor_idx = neighbor_idx[:, 1:]  # Remove self-loops
+            _, neighbor_idx = dists.topk(k=min(self.k_neighbors + 1, len(positions)), 
+                                    dim=-1, largest=False)
+            
+            # Convert KNN indices to edge list format
+            rows = torch.arange(len(positions)).unsqueeze(1).expand(-1, self.k_neighbors)
+            rows = rows.flatten()
+            cols = neighbor_idx[:, 1:].flatten()  # Remove self-loops
+            
+            # Return in COO format
+            return torch.stack([rows, cols], dim=0)
         else:
             # Use radius graph
             dists = torch.cdist(positions, positions)
-            neighbor_idx = (dists < self.radius).nonzero()
-            # Remove self-loops
-            neighbor_idx = neighbor_idx[neighbor_idx[:, 0] != neighbor_idx[:, 1]]
-        
-        return neighbor_idx
+            mask = (dists < self.radius) & (dists > 0)  # Exclude self-loops
+            rows, cols = mask.nonzero(as_tuple=True)
+            
+            return torch.stack([rows, cols], dim=0)
 
     def __getitem__(self, idx):
         data = self.dataset[idx]
@@ -76,7 +82,6 @@ class ResidueDataset:
         return positions, features, edge_index, labels
 
 def collate_fn(batch):
-    # Concatenate batch elements with offset for edge indices
     cumsum = 0
     all_pos = []
     all_feat = []
@@ -84,15 +89,23 @@ def collate_fn(batch):
     all_labels = []
     
     for pos, feat, edge_index, labels in batch:
+        num_nodes = len(pos)
+        
         all_pos.append(pos)
         all_feat.append(feat)
-        all_edge_index.append(edge_index + cumsum)
+        
+        # Offset edge indices by cumsum
+        edge_index_offset = edge_index.clone()
+        edge_index_offset[0] += cumsum  # Offset rows
+        edge_index_offset[1] += cumsum  # Offset cols
+        all_edge_index.append(edge_index_offset)
+        
         all_labels.append(labels)
-        cumsum += len(pos)
+        cumsum += num_nodes
     
     return (torch.cat(all_pos, dim=0),
             torch.cat(all_feat, dim=0),
-            torch.cat(all_edge_index, dim=0),
+            torch.cat(all_edge_index, dim=1),  # Concatenate edge indices along dim=1
             torch.cat(all_labels, dim=0))
 
 def train_epoch(model, loader, optimizer, criterion, device):
@@ -101,17 +114,14 @@ def train_epoch(model, loader, optimizer, criterion, device):
     correct = 0
     total = 0
     
-    for pos, feat, mask, labels in loader:
-        if pos is None:
-            continue
-            
+    for pos, feat, edge_index, labels in loader:
         pos = pos.to(device)
         feat = feat.to(device)
-        mask = mask.to(device)
+        edge_index = edge_index.to(device)
         labels = labels.to(device)
         
         optimizer.zero_grad()
-        output = model(feat, pos, mask)
+        output = model(feat, pos, edge_index)
         loss = criterion(output, labels)
         
         loss.backward()
@@ -128,19 +138,16 @@ def train_epoch(model, loader, optimizer, criterion, device):
 def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss = 0
-    correct = 0 
+    correct = 0
     total = 0
     
-    for pos, feat, mask, labels in loader:
-        if pos is None:
-            continue
-            
+    for pos, feat, edge_index, labels in loader:
         pos = pos.to(device)
         feat = feat.to(device)
-        mask = mask.to(device)
+        edge_index = edge_index.to(device)
         labels = labels.to(device)
         
-        output = model(feat, pos, mask)
+        output = model(feat, pos, edge_index)
         loss = criterion(output, labels)
         
         total_loss += loss.item() * len(labels)

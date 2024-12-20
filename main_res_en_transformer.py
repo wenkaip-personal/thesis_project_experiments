@@ -8,7 +8,7 @@ from models.en_transformer.en_transformer import EnTransformer
 from residue_common import setup_training, train_model
 
 class EnTransformerResidueClassifier(nn.Module):
-    def __init__(self, dim, depth, dim_head=64, heads=8):
+    def __init__(self, dim, depth, dim_head=64, heads=8, checkpoint=False):
         super().__init__()
         self.input_embedding = nn.Linear(5, dim)
         self.transformer = EnTransformer(
@@ -17,7 +17,8 @@ class EnTransformerResidueClassifier(nn.Module):
             dim_head=dim_head,
             heads=heads,
             neighbors=0,  # We'll handle neighbors through edge_index
-            only_sparse_neighbors=True
+            only_sparse_neighbors=True,
+            checkpoint=checkpoint
         )
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim),
@@ -35,12 +36,12 @@ class EnTransformerResidueClassifier(nn.Module):
         return self.mlp(feat_out)
 
 def main(args):
+    # Only pass the parameters that the classifier expects
     model_kwargs = {
         'dim': args.dim,
         'depth': args.depth,
         'dim_head': args.dim_head,
         'heads': args.heads,
-        'neighbors': args.neighbors,
         'checkpoint': args.checkpoint
     }
     
