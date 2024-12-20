@@ -11,22 +11,24 @@ class EGNNResidueClassifier(nn.Module):
     def __init__(self, in_node_nf, hidden_nf, out_node_nf, n_layers, attention):
         super().__init__()
         self.egnn = EGNN(in_node_nf=in_node_nf,
-                        hidden_nf=hidden_nf, 
+                        hidden_nf=hidden_nf,
                         out_node_nf=hidden_nf,
                         n_layers=n_layers,
                         attention=attention)
-                        
+        
         self.mlp = nn.Sequential(
             nn.Linear(hidden_nf, hidden_nf),
             nn.ReLU(),
             nn.Linear(hidden_nf, out_node_nf)
         )
+    
+    def forward(self, h, x, edge_index):
+        # Convert edge_index to format expected by EGNN
+        edges = edge_index.t().contiguous()
+        edge_attr = torch.ones(edges.size(1), 1).to(edges.device)
         
-    def forward(self, h, x, mask=None):
-        edges, edge_attr = get_edges_batch(x.size(1), x.size(0))
         h_out, x_out = self.egnn(h, x, edges, edge_attr)
-        h_pool = scatter_mean(h_out, batch=torch.arange(x.size(0)).repeat_interleave(x.size(1)), dim=0)
-        return self.mlp(h_pool)
+        return self.mlp(h_out)
 
 def main(args):
     model_kwargs = {
@@ -54,6 +56,9 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--outf', type=str, default='res_outputs')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--k_neighbors', type=int, default=16)
+    parser.add_argument('--radius', type=float, default=10.0)
+    parser.add_argument('--use_knn', type=bool, default=True)
     args = parser.parse_args()
 
     os.makedirs(args.outf, exist_ok=True)

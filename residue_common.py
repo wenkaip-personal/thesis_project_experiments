@@ -7,64 +7,90 @@ from atom3d.datasets import LMDBDataset
 from torch.utils.data import DataLoader
 
 class ResidueDataset:
-    def __init__(self, lmdb_path, max_atoms=128):
+    def __init__(self, lmdb_path, k_neighbors=16, radius=10.0, use_knn=True):
         self.dataset = LMDBDataset(lmdb_path)
-        self.max_atoms = max_atoms
+        self.k_neighbors = k_neighbors
+        self.radius = radius
+        self.use_knn = use_knn
         self.amino_acids = ['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS',
                            'ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP',
                            'TYR','VAL']
         self.aa_to_idx = {aa: idx for idx, aa in enumerate(self.amino_acids)}
-        self.atom_types = ['C', 'N', 'O', 'S', 'P']
+
+    def get_residue_features(self, atoms_df, residue_indices):
+        # Calculate residue center (using CA atom or mean of all atoms)
+        residue_pos = atoms_df.iloc[residue_indices][['x','y','z']].mean().values
         
-    def __len__(self):
-        return len(self.dataset)
+        # Calculate residue features (you can modify this based on what features you want)
+        residue_feats = torch.zeros(5)  # Example: 5 basic chemical properties
+        # Add relevant residue features here
         
+        return torch.tensor(residue_pos), residue_feats
+
+    def build_graph(self, positions):
+        positions = torch.tensor(positions)
+        if self.use_knn:
+            # Use KNN
+            dists = torch.cdist(positions, positions)
+            _, neighbor_idx = dists.topk(k=min(self.k_neighbors, len(positions)-1), 
+                                       dim=-1, largest=False)
+            neighbor_idx = neighbor_idx[:, 1:]  # Remove self-loops
+        else:
+            # Use radius graph
+            dists = torch.cdist(positions, positions)
+            neighbor_idx = (dists < self.radius).nonzero()
+            # Remove self-loops
+            neighbor_idx = neighbor_idx[neighbor_idx[:, 0] != neighbor_idx[:, 1]]
+        
+        return neighbor_idx
+
     def __getitem__(self, idx):
         data = self.dataset[idx]
         atoms_df = data['atoms']
-        labels_df = data['labels'] 
+        labels_df = data['labels']
         indices = data['subunit_indices']
         
-        envs = []
+        # Get residue positions and features
+        positions = []
+        features = []
+        labels = []
+        
         for i, (_, label_row) in enumerate(labels_df.iterrows()):
-            env_indices = indices[i]
-            if len(env_indices) > self.max_atoms:
-                continue
-                
-            env_atoms = atoms_df.iloc[env_indices]
-            positions = torch.FloatTensor(env_atoms[['x','y','z']].values)
-            atom_features = torch.zeros((len(env_indices), len(self.atom_types)))
-            for j, atype in enumerate(env_atoms['element']):
-                if atype in self.atom_types:
-                    atom_features[j, self.atom_types.index(atype)] = 1
-                    
+            pos, feat = self.get_residue_features(atoms_df, indices[i])
+            positions.append(pos)
+            features.append(feat)
             label = self.aa_to_idx[label_row['label'] if isinstance(label_row['label'], str) 
                                  else self.amino_acids[label_row['label']]]
-            
-            envs.append((positions, atom_features, label))
-            
-        return envs
+            labels.append(label)
+
+        positions = torch.stack(positions)
+        features = torch.stack(features)
+        labels = torch.tensor(labels)
+        
+        # Build graph connectivity
+        edge_index = self.build_graph(positions)
+        
+        return positions, features, edge_index, labels
 
 def collate_fn(batch):
-    envs = [env for sample in batch for env in sample]
-    if not envs:
-        return None
+    # Concatenate batch elements with offset for edge indices
+    cumsum = 0
+    all_pos = []
+    all_feat = []
+    all_edge_index = []
+    all_labels = []
     
-    n_envs = len(envs)
-    max_atoms = max(env[0].size(0) for env in envs)
+    for pos, feat, edge_index, labels in batch:
+        all_pos.append(pos)
+        all_feat.append(feat)
+        all_edge_index.append(edge_index + cumsum)
+        all_labels.append(labels)
+        cumsum += len(pos)
     
-    pos = torch.zeros(n_envs, max_atoms, 3)
-    feat = torch.zeros(n_envs, max_atoms, len(envs[0][1][0]))
-    mask = torch.zeros(n_envs, max_atoms, dtype=torch.bool)
-    labels = torch.LongTensor([env[2] for env in envs])
-    
-    for i, (pos_i, feat_i, _) in enumerate(envs):
-        n_atoms = pos_i.size(0)
-        pos[i, :n_atoms] = pos_i
-        feat[i, :n_atoms] = feat_i
-        mask[i, :n_atoms] = 1
-        
-    return pos, feat, mask, labels
+    return (torch.cat(all_pos, dim=0),
+            torch.cat(all_feat, dim=0),
+            torch.cat(all_edge_index, dim=0),
+            torch.cat(all_labels, dim=0))
 
 def train_epoch(model, loader, optimizer, criterion, device):
     model.train()

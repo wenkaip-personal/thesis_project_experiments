@@ -8,26 +8,31 @@ from models.en_transformer.en_transformer import EnTransformer
 from residue_common import setup_training, train_model
 
 class EnTransformerResidueClassifier(nn.Module):
-    def __init__(self, dim, depth, num_tokens=None, dim_head=64, heads=8, neighbors=0, checkpoint=False):
+    def __init__(self, dim, depth, dim_head=64, heads=8):
         super().__init__()
         self.input_embedding = nn.Linear(5, dim)
         self.transformer = EnTransformer(
-            dim=dim, depth=depth, num_tokens=num_tokens,
-            dim_head=dim_head, heads=heads, neighbors=neighbors,
-            checkpoint=checkpoint
+            dim=dim,
+            depth=depth,
+            dim_head=dim_head,
+            heads=heads,
+            neighbors=0,  # We'll handle neighbors through edge_index
+            only_sparse_neighbors=True
         )
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim),
             nn.ReLU(),
             nn.Linear(dim, 20)
         )
-        
-    def forward(self, feat, coors, mask=None):
+    
+    def forward(self, feat, coors, edge_index):
         feat = self.input_embedding(feat)
-        feat_out, _ = self.transformer(feat, coors, mask=mask)
-        feat_pool = scatter_mean(feat_out, batch=torch.arange(coors.size(0), 
-                               device=coors.device).repeat_interleave(coors.size(1)), dim=0)
-        return self.mlp(feat_pool)
+        # Create adjacency matrix from edge_index
+        adj_mat = torch.zeros(coors.size(0), coors.size(0), device=coors.device)
+        adj_mat[edge_index[:, 0], edge_index[:, 1]] = 1
+        
+        feat_out, _ = self.transformer(feat, coors, adj_mat=adj_mat)
+        return self.mlp(feat_out)
 
 def main(args):
     model_kwargs = {
@@ -59,6 +64,9 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--outf', type=str, default='res_outputs')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--k_neighbors', type=int, default=16)
+    parser.add_argument('--radius', type=float, default=10.0)
+    parser.add_argument('--use_knn', type=bool, default=True)
     args = parser.parse_args()
 
     os.makedirs(args.outf, exist_ok=True)
