@@ -1,8 +1,10 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import atom3d.datasets as da
 import atom3d.util.transforms as tr
 import atom3d.util.graph as gr
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
 
 class RESDataset(Dataset):
     def __init__(self, lmdb_path, transform=None):
@@ -22,24 +24,25 @@ class RESDataset(Dataset):
         # Convert atoms to graph representation
         node_feats, edge_index, edge_attrs, pos = gr.prot_df_to_graph(atoms_df)
         
-        # Convert to PyTorch tensors
-        node_feats = torch.tensor(node_feats, dtype=torch.float32)
-        edge_index = torch.tensor(edge_index, dtype=torch.long)
-        edge_attrs = torch.tensor(edge_attrs, dtype=torch.float32)
-        pos = torch.tensor(pos, dtype=torch.float32)
-        label = torch.tensor(label, dtype=torch.long)
+        # Convert to PyTorch tensors using clone().detach()
+        node_feats = torch.as_tensor(node_feats, dtype=torch.float32)
+        edge_index = torch.as_tensor(edge_index, dtype=torch.long)
+        edge_attrs = torch.as_tensor(edge_attrs, dtype=torch.float32)
+        pos = torch.as_tensor(pos, dtype=torch.float32)
+        label = torch.as_tensor(label, dtype=torch.long)
         
-        return {
-            'node_feats': node_feats,
-            'edge_index': edge_index,  
-            'edge_attrs': edge_attrs,
-            'pos': pos,
-            'label': label
-        }
+        # Return PyG Data object
+        return Data(
+            x=node_feats,
+            edge_index=edge_index,
+            edge_attr=edge_attrs,
+            pos=pos,
+            y=label
+        )
 
 def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_workers=4):
     """
-    Creates dataloaders for RES dataset splits
+    Creates dataloaders for RES dataset splits using PyG's DataLoader
     """
     # Create datasets
     train_dataset = RESDataset(train_path)

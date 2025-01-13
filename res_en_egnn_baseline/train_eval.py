@@ -13,16 +13,12 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
     pbar = tqdm(train_loader, desc='Training')
     for batch in pbar:
         # Move batch to device
-        node_feats = batch['node_feats'].to(device)
-        pos = batch['pos'].to(device)
-        edge_index = batch['edge_index'].to(device)
-        edge_attrs = batch['edge_attrs'].to(device)
-        labels = batch['label'].to(device)
+        batch = batch.to(device)
         
         # Forward pass
         optimizer.zero_grad()
-        logits = model(node_feats, pos, edge_index, edge_attrs)
-        loss = criterion(logits, labels)
+        logits = model(batch.x, batch.pos, batch.edge_index, batch.edge_attr)
+        loss = criterion(logits, batch.y)
         
         # Backward pass
         loss.backward()
@@ -30,8 +26,8 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
         
         # Calculate accuracy
         preds = torch.argmax(logits, dim=1)
-        total_correct += (preds == labels).sum().item()
-        total_samples += labels.size(0)
+        total_correct += (preds == batch.y).sum().item()
+        total_samples += batch.y.size(0)
         
         # Update metrics
         total_loss += loss.item()
@@ -50,20 +46,16 @@ def evaluate(model, data_loader, criterion, device, split="val"):
         pbar = tqdm(data_loader, desc=f'{split} Evaluation')
         for batch in pbar:
             # Move batch to device
-            node_feats = batch['node_feats'].to(device)
-            pos = batch['pos'].to(device)
-            edge_index = batch['edge_index'].to(device)
-            edge_attrs = batch['edge_attrs'].to(device)
-            labels = batch['label'].to(device)
+            batch = batch.to(device)
             
             # Forward pass
-            logits = model(node_feats, pos, edge_index, edge_attrs)
-            loss = criterion(logits, labels)
+            logits = model(batch.x, batch.pos, batch.edge_index, batch.edge_attr)
+            loss = criterion(logits, batch.y)
             
             # Calculate accuracy
             preds = torch.argmax(logits, dim=1)
-            total_correct += (preds == labels).sum().item()
-            total_samples += labels.size(0)
+            total_correct += (preds == batch.y).sum().item()
+            total_samples += batch.y.size(0)
             
             # Update metrics
             total_loss += loss.item()
