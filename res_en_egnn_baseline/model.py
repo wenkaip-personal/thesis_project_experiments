@@ -1,5 +1,12 @@
+import os
+import sys
 import torch
 import torch.nn as nn
+
+# Add parent directory to Python path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
 from models.egnn.egnn_clean import EGNN
 
 class RESEGNN(nn.Module):
