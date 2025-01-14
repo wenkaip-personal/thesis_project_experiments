@@ -40,6 +40,10 @@ class RESEGNN(nn.Module):
         self.to(device)
     
     def forward(self, node_feats, pos, edge_index, edge_attrs=None):
+        # Ensure edge_attrs has correct dimensions if not None
+        if edge_attrs is not None and edge_attrs.dim() == 1:
+            edge_attrs = edge_attrs.unsqueeze(-1)
+
         # Process through EGNN
         node_feats, _ = self.egnn(node_feats, pos, edge_index, edge_attrs)
         
