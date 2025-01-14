@@ -28,9 +28,6 @@ class RESDataset(Dataset):
         node_feats = torch.as_tensor(node_feats, dtype=torch.float32)
         edge_index = torch.as_tensor(edge_index, dtype=torch.long)
         edge_attrs = torch.as_tensor(edge_attrs, dtype=torch.float32)
-        # Add extra dimension to edge_attrs if it's 1D
-        if edge_attrs.dim() == 1:
-            edge_attrs = edge_attrs.unsqueeze(-1)
         pos = torch.as_tensor(pos, dtype=torch.float32)
         label = torch.as_tensor(label, dtype=torch.long)
         

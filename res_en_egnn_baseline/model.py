@@ -15,6 +15,7 @@ class RESEGNN(nn.Module):
         in_node_nf=18,  # Change to match actual input features
         hidden_nf=128,  # Hidden dimension
         out_node_nf=20,  # Number of residue classes
+        in_edge_nf=1,   # Add edge feature dimension
         n_layers=4,
         device='cuda' if torch.cuda.is_available() else 'cpu'
     ):
@@ -25,6 +26,7 @@ class RESEGNN(nn.Module):
             in_node_nf=in_node_nf,
             hidden_nf=hidden_nf,
             out_node_nf=hidden_nf,
+            in_edge_nf=in_edge_nf,
             n_layers=n_layers,
             device=device
         )
@@ -40,9 +42,12 @@ class RESEGNN(nn.Module):
         self.to(device)
     
     def forward(self, node_feats, pos, edge_index, edge_attrs=None):
-        # Ensure edge_attrs has correct dimensions if not None
-        if edge_attrs is not None and edge_attrs.dim() == 1:
-            edge_attrs = edge_attrs.unsqueeze(-1)
+        # Move all inputs to device
+        node_feats = node_feats.to(self.device)
+        pos = pos.to(self.device)
+        edge_index = edge_index.to(self.device)
+        if edge_attrs is not None:
+            edge_attrs = edge_attrs.to(self.device)
 
         # Process through EGNN
         node_feats, _ = self.egnn(node_feats, pos, edge_index, edge_attrs)
