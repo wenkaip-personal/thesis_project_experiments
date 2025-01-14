@@ -12,7 +12,7 @@ from models.egnn.egnn_clean import EGNN
 class RESEGNN(nn.Module):
     def __init__(
         self,
-        in_node_nf=21,  # Number of atom features
+        in_node_nf=18,  # Change to match actual input features
         hidden_nf=128,  # Hidden dimension
         out_node_nf=20,  # Number of residue classes
         n_layers=4,

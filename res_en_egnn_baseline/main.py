@@ -28,9 +28,15 @@ def main():
     )
     print("Datasets loaded successfully")
     
-    # Initialize model
+    # Get number of node features from first batch
+    for batch in train_loader:
+        in_node_nf = batch.x.size(-1)  # Get number of input features
+        break
+        
+    # Initialize model with correct input dimension
     print("Initializing model...")
     model = RESEGNN(
+        in_node_nf=in_node_nf,  # Use detected input dimension
         hidden_nf=HIDDEN_DIM,
         n_layers=N_LAYERS,
         device=device
