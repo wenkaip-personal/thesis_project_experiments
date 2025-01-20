@@ -1,4 +1,4 @@
-import torch
+import torch 
 import torch.nn as nn
 from en_transformer import EnTransformer
 
@@ -24,7 +24,8 @@ class RESEnTransformer(nn.Module):
             heads=heads,
             num_tokens=num_atom_types,
             rel_pos_emb=True,
-            dropout=dropout
+            attn_dropout=dropout,    # Changed from dropout to attn_dropout
+            ff_dropout=dropout       # Added ff_dropout
         )
         
         # Prediction head
