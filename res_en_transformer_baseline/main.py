@@ -19,9 +19,9 @@ def main():
     EPOCHS = 100
     
     # Paths to the split datasets 
-    TRAIN_PATH = "data/split-by-cath-topology/train"
-    VAL_PATH = "data/split-by-cath-topology/val"  
-    TEST_PATH = "data/split-by-cath-topology/test"
+    TRAIN_PATH = "/content/drive/MyDrive/thesis_project/atom3d_res_dataset/split-by-cath-topology/data/train"
+    VAL_PATH = "/content/drive/MyDrive/thesis_project/atom3d_res_dataset/split-by-cath-topology/data/val" 
+    TEST_PATH = "/content/drive/MyDrive/thesis_project/atom3d_res_dataset/split-by-cath-topology/data/test"
     
     # Get dataloaders
     print("Loading datasets...")
