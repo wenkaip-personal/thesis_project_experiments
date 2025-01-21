@@ -23,6 +23,10 @@ class RESDataset(Dataset):
         
         # Convert atoms to graph representation
         node_feats, edge_index, edge_attrs, pos = gr.prot_df_to_graph(atoms_df)
+
+        # Add extra dimension to edge_attrs if it's 1D
+        if edge_attrs.dim() == 1:
+            edge_attrs = edge_attrs.unsqueeze(-1)
         
         # Return PyG Data object
         return Data(
