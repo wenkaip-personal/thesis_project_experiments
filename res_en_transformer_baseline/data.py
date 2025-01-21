@@ -1,9 +1,7 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import atom3d.datasets as da
 import atom3d.util.transforms as tr
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
 
 class RESTransformerDataset(Dataset):
     def __init__(self, lmdb_path):
@@ -30,8 +28,9 @@ class RESTransformerDataset(Dataset):
             if atom in unique_atoms:
                 atom_feats[i, unique_atoms.index(atom)] = 1.0
         
-        # Convert to PyTorch tensors
-        coords = torch.tensor(coords, dtype=torch.float32)
+        # Convert to contiguous tensors with fixed dtype
+        coords = torch.tensor(coords, dtype=torch.float32).contiguous()
+        atom_feats = atom_feats.contiguous()
         label = torch.tensor(label, dtype=torch.long)
         
         # Return tensors in format expected by En Transformer
@@ -52,27 +51,18 @@ def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_work
     
     # Create dataloaders with custom collate function
     def collate_fn(batch):
-        # Get max sequence length in this batch
-        max_atoms = max(item['feats'].size(0) for item in batch)
-        batch_size = len(batch)
-        
-        # Get dimensions of features
-        feat_dim = batch[0]['feats'].size(1)
-        
-        # Initialize padded tensors
-        padded_feats = torch.zeros(batch_size, max_atoms, feat_dim)
-        padded_coords = torch.zeros(batch_size, max_atoms, 3)
-        mask = torch.zeros(batch_size, max_atoms, dtype=torch.bool)
+        # Stack features
+        feats = torch.stack([item['feats'] for item in batch])
+        coords = torch.stack([item['coords'] for item in batch])
         labels = torch.stack([item['label'] for item in batch])
         
-        # Fill padded tensors
+        # Create mask for padding if sequences have different lengths
+        max_len = max(item['coords'].size(0) for item in batch)
+        mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
         for i, item in enumerate(batch):
-            n_atoms = item['feats'].size(0)
-            padded_feats[i, :n_atoms] = item['feats']
-            padded_coords[i, :n_atoms] = item['coords']
-            mask[i, :n_atoms] = True  # True indicates valid atoms
+            mask[i, :item['coords'].size(0)] = True
             
-        return padded_feats, padded_coords, labels, mask
+        return feats, coords, labels, mask
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                             num_workers=num_workers, collate_fn=collate_fn)
