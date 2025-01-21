@@ -49,20 +49,26 @@ def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_work
     val_dataset = RESTransformerDataset(val_path)
     test_dataset = RESTransformerDataset(test_path)
     
-    # Create dataloaders with custom collate function
     def collate_fn(batch):
-        # Stack features
-        feats = torch.stack([item['feats'] for item in batch])
-        coords = torch.stack([item['coords'] for item in batch])
+        # Find max sequence length in batch
+        max_len = max(item['feats'].size(0) for item in batch)
+        batch_size = len(batch)
+        feat_dim = batch[0]['feats'].size(1)  # Should be 5 for the one-hot atom type encoding
+        
+        # Initialize padded tensors
+        feats_padded = torch.zeros(batch_size, max_len, feat_dim)
+        coords_padded = torch.zeros(batch_size, max_len, 3)
+        mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
         labels = torch.stack([item['label'] for item in batch])
         
-        # Create mask for padding if sequences have different lengths
-        max_len = max(item['coords'].size(0) for item in batch)
-        mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
+        # Fill padded tensors with actual data
         for i, item in enumerate(batch):
-            mask[i, :item['coords'].size(0)] = True
-            
-        return feats, coords, labels, mask
+            seq_len = item['feats'].size(0)
+            feats_padded[i, :seq_len] = item['feats']
+            coords_padded[i, :seq_len] = item['coords']
+            mask[i, :seq_len] = True  # True indicates valid positions, False indicates padding
+                
+        return feats_padded, coords_padded, labels, mask
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                             num_workers=num_workers, collate_fn=collate_fn)
