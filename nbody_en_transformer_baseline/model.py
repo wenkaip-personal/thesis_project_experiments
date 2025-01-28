@@ -55,6 +55,10 @@ class NBodyTransformer(nn.Module):
         Returns:
             pred_pos: Predicted positions [batch_size, n_nodes, 3]
         """
+        # Add shape check
+        if len(charge.shape) != 2:
+            raise ValueError(f"Expected charge to have 2 dimensions [batch_size, n_nodes], got shape {charge.shape}")
+        
         batch_size, n_nodes = charge.size()
         
         # Create batch-aware fully-connected edge index

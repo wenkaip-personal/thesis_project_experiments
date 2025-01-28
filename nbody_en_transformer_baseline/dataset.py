@@ -39,9 +39,14 @@ class NBodyTransformerDataset(Dataset):
         vel = torch.tensor(vel, dtype=torch.float32).transpose(2, 3)
         charges = torch.tensor(charges, dtype=torch.float32)
         
+        # Ensure charges has shape [n_samples, n_nodes]
+        if len(charges.shape) == 1:
+            n_nodes = loc.size(1)
+            charges = charges.view(-1, n_nodes)
+        
         # Limit number of samples
         loc = loc[0:self.max_samples]
-        vel = vel[0:self.max_samples]
+        vel = vel[0:self.max_samples] 
         charges = charges[0:self.max_samples]
 
         return loc, vel, charges
