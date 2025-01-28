@@ -25,9 +25,9 @@ class NBodyTransformerDataset(Dataset):
 
     def load(self):
         # Load raw data
-        loc = np.load('n_body_system/dataset/loc_' + self.sufix + '.npy')
-        vel = np.load('n_body_system/dataset/vel_' + self.sufix + '.npy')
-        charges = np.load('n_body_system/dataset/charges_' + self.sufix + '.npy')
+        loc = np.load('../n_body_system/dataset/loc_' + self.sufix + '.npy')
+        vel = np.load('../n_body_system/dataset/vel_' + self.sufix + '.npy')
+        charges = np.load('../n_body_system/dataset/charges_' + self.sufix + '.npy')
 
         # Preprocess data
         loc, vel, charges = self.preprocess(loc, vel, charges)
