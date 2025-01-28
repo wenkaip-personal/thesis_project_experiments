@@ -49,31 +49,39 @@ class NBodyTransformer(nn.Module):
     def forward(self, charge, x, vel):
         """
         Args:
-            charge: Node charges [n_nodes, 1]
-            x: Node positions [n_nodes, 3]
-            vel: Node velocities [n_nodes, 3]
+            charge: Node charges [batch_size, n_nodes]
+            x: Node positions [batch_size, n_nodes, 3]
+            vel: Node velocities [batch_size, n_nodes, 3]
         Returns:
-            pred_pos: Predicted positions [n_nodes, 3]
+            pred_pos: Predicted positions [batch_size, n_nodes, 3]
         """
-        batch_size = charge.size(0)
+        batch_size, n_nodes = charge.size()
         
-        # Create fully-connected edge index
-        n_nodes = charge.size(0)
+        # Create batch-aware fully-connected edge index
         rows, cols = [], []
-        for i in range(n_nodes):
-            for j in range(n_nodes):
-                if i != j:
-                    rows.append(i)
-                    cols.append(j)
+        for b in range(batch_size):
+            for i in range(n_nodes):
+                for j in range(n_nodes):
+                    if i != j:
+                        rows.append(b * n_nodes + i)
+                        cols.append(b * n_nodes + j)
         edge_index = torch.tensor([rows, cols], device=self.device)
         
+        # Reshape inputs for processing
+        charge = charge.view(-1, 1)  # [batch_size * n_nodes, 1]
+        x = x.view(-1, 3)  # [batch_size * n_nodes, 3]
+        vel = vel.view(-1, 3)  # [batch_size * n_nodes, 3]
+        
         # Project inputs to feature space
-        h = self.charge_proj(charge.unsqueeze(-1)) + self.vel_proj(vel)
+        h = self.charge_proj(charge) + self.vel_proj(vel)  # [batch_size * n_nodes, hidden_nf]
         
         # Apply transformer
         h, x_out = self.transformer(h, x, edge_index)
         
         # Predict position update
         pred_pos = self.pos_pred(h)
+        
+        # Reshape output back to batch form
+        pred_pos = pred_pos.view(batch_size, n_nodes, 3)
         
         return pred_pos
