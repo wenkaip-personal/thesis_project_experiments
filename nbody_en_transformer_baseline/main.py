@@ -109,12 +109,12 @@ def main():
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), f'models/{args.exp_name}_best.pt')
+            torch.save(model.state_dict(), f'nbody_en_transformer_baseline/models/{args.exp_name}_best.pt')
         
         print(f'Epoch {epoch}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Test Loss: {test_loss:.4f}')
         
         # Save results
-        with open(f'results/{args.exp_name}_results.json', 'w') as f:
+        with open(f'nbody_en_transformer_baseline/results/{args.exp_name}_results.json', 'w') as f:
             json.dump(results, f)
 
 if __name__ == '__main__':
