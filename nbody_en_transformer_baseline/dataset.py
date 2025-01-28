@@ -54,7 +54,7 @@ class NBodyTransformerDataset(Dataset):
     def __getitem__(self, i):
         loc, vel, charges = self.data
         
-        # Select appropriate frames based on dataset
+        # Select appropriate frames based on dataset  
         if self.dataset_name == "nbody":
             frame_0, frame_T = 6, 8
         elif self.dataset_name == "nbody_small":
@@ -64,7 +64,8 @@ class NBodyTransformerDataset(Dataset):
         else:
             raise Exception("Wrong dataset partition %s" % self.dataset_name)
 
-        return loc[i, frame_0], vel[i, frame_0], charges[i], loc[i, frame_T]
+        # Squeeze the last dimension of charges to make it [batch_size, n_nodes]
+        return loc[i, frame_0], vel[i, frame_0], charges[i].squeeze(-1), loc[i, frame_T]
 
     def __len__(self):
         return len(self.data[0])
