@@ -19,7 +19,8 @@ class RESDataset(Dataset):
         
         # Extract the atoms dataframe and label
         atoms_df = item['atoms']
-        label = item['labels']['label'].values[0]  # Get the residue label
+        # Convert label to tensor and ensure it's a long tensor as required by CrossEntropyLoss
+        label = torch.tensor(item['labels']['label'].values[0], dtype=torch.long)
         
         # Convert atoms to graph representation
         node_feats, edge_index, edge_attrs, pos = gr.prot_df_to_graph(atoms_df)
@@ -34,7 +35,7 @@ class RESDataset(Dataset):
             edge_index=edge_index,
             edge_attr=edge_attrs,
             pos=pos,
-            y=label
+            y=label  # Now label is a tensor
         )
 
 def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_workers=4, debug=False):
