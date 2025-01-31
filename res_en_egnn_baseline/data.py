@@ -37,7 +37,7 @@ class RESDataset(Dataset):
             y=label
         )
 
-def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_workers=4):
+def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_workers=4, debug=False):
     """
     Creates dataloaders for RES dataset splits using PyG's DataLoader
     """
@@ -46,9 +46,15 @@ def get_res_dataloaders(train_path, val_path, test_path, batch_size=32, num_work
     val_dataset = RESDataset(val_path) 
     test_dataset = RESDataset(test_path)
     
-    # Create dataloaders
+    if debug:
+        # Take only first 100 samples for each split when debugging
+        train_dataset = torch.utils.data.Subset(train_dataset, range(100))
+        val_dataset = torch.utils.data.Subset(val_dataset, range(50))
+        test_dataset = torch.utils.data.Subset(test_dataset, range(50))
+    
+    # Create dataloaders 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)  
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
     return train_loader, val_loader, test_loader
