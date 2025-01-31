@@ -49,13 +49,10 @@ class RESEGNN(nn.Module):
         if edge_attrs is not None:
             edge_attrs = edge_attrs.to(self.device)
 
-        # Process through EGNN
+        # Process through EGNN - this returns features for all nodes
         node_feats, _ = self.egnn(node_feats, pos, edge_index, edge_attrs)
         
-        # Get prediction for central residue
-        central_feats = node_feats[0]  # The first node is the central residue
-        
-        # Get class predictions
-        logits = self.pred_head(central_feats)
+        # Get predictions for all nodes in batch
+        logits = self.pred_head(node_feats)  # Shape: [batch_size * num_nodes, num_classes]
         
         return logits
