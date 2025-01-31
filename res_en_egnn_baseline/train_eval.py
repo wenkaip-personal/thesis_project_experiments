@@ -18,14 +18,6 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
         # Forward pass
         optimizer.zero_grad()
         logits = model(batch.x, batch.pos, batch.edge_index, batch.edge_attr)
-        
-        # Get batch indices to match predictions with labels
-        batch_size = batch.batch.max().item() + 1
-        
-        # Reshape logits and labels to match
-        logits = logits.view(batch_size, -1, logits.size(-1))  # [batch_size, num_nodes, num_classes]
-        logits = logits[:,0,:]  # Take prediction for first node only
-        
         loss = criterion(logits, batch.y)
         
         # Backward pass
@@ -58,14 +50,6 @@ def evaluate(model, data_loader, criterion, device, split="val"):
             
             # Forward pass
             logits = model(batch.x, batch.pos, batch.edge_index, batch.edge_attr)
-            
-            # Get batch indices to match predictions with labels
-            batch_size = batch.batch.max().item() + 1
-            
-            # Reshape logits and labels to match
-            logits = logits.view(batch_size, -1, logits.size(-1))  # [batch_size, num_nodes, num_classes]
-            logits = logits[:,0,:]  # Take prediction for first node only
-            
             loss = criterion(logits, batch.y)
             
             # Calculate accuracy
