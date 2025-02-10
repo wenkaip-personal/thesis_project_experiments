@@ -24,9 +24,6 @@ class NBodyTransformer(nn.Module):
         self.hidden_nf = hidden_nf
         self.device = device
         
-        # Input projections for invariant features
-        self.charge_proj = nn.Linear(1, hidden_nf)
-        
         # Process velocities in an equivariant way
         self.vel_norm = nn.Sequential(
             nn.Linear(1, hidden_nf),
@@ -77,9 +74,6 @@ class NBodyTransformer(nn.Module):
                         cols.append(b * n_nodes + j)
         edge_index = torch.tensor([rows, cols], device=self.device)
         
-        # Process invariant features
-        charge = charge.view(-1, 1)  # [batch_size * n_nodes, 1]
-        
         # Process equivariant features
         x = x.view(-1, 3)  # [batch_size * n_nodes, 3]
         vel = vel.view(-1, 3)  # [batch_size * n_nodes, 3]
@@ -88,7 +82,7 @@ class NBodyTransformer(nn.Module):
         vel_norm = torch.norm(vel, dim=-1, keepdim=True)  # [batch_size * n_nodes, 1]
         
         # Create invariant node features
-        h = self.charge_proj(charge) + self.vel_norm(vel_norm)  # [batch_size * n_nodes, hidden_nf]
+        h = self.vel_norm(vel_norm)  # [batch_size * n_nodes, hidden_nf]
         
         # Apply transformer (maintains equivariance)
         h, x_out = self.transformer(h, x, edge_index)

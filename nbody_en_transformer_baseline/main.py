@@ -9,7 +9,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default='exp_1', help='experiment name')
     parser.add_argument('--batch_size', type=int, default=100)
-    parser.add_argument('--epochs', type=int, default=10000)
+    parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--no-cuda', action='store_true', default=False)
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--lr', type=float, default=5e-4)
