@@ -64,9 +64,10 @@ class EnAttention(nn.Module):
         
         # Coordinate attention
         edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
-
+        coord_weights = F.softmax(edge_weights, dim=0)
+        
         # Update coordinates while preserving E(n) equivariance
-        coor_diff = edge_weights * rel_pos  # [n_edges, 3]
+        coor_diff = coord_weights * rel_pos  # [n_edges, 3]
         coor_out = torch.zeros_like(x)  # [n_nodes, 3]
         coor_out.index_add_(0, row, coor_diff)
         
