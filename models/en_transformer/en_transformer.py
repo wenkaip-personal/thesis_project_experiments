@@ -46,7 +46,7 @@ class EnAttention(nn.Module):
         rel_dist = torch.sum(rel_pos ** 2, dim=-1, keepdim=True)  # [n_edges, 1]
         
         # Process edges
-        edge_attr = torch.cat([h[row], rel_dist], dim=-1)  # [n_edges, hidden_nf + 1]
+        edge_attr = torch.cat([h[row], h[col], rel_dist], dim=-1)  # [n_edges, hidden_nf + 1]
         edge_features = self.edge_mlp(edge_attr)  # [n_edges, hidden_nf]
         
         # Feature attention
@@ -64,10 +64,9 @@ class EnAttention(nn.Module):
         
         # Coordinate attention
         edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
-        coord_weights = F.softmax(edge_weights, dim=0)
-        
+
         # Update coordinates while preserving E(n) equivariance
-        coor_diff = coord_weights * rel_pos  # [n_edges, 3]
+        coor_diff = edge_weights * rel_pos  # [n_edges, 3]
         coor_out = torch.zeros_like(x)  # [n_nodes, 3]
         coor_out.index_add_(0, row, coor_diff)
         
