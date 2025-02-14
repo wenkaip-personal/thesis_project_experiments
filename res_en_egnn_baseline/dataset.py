@@ -20,7 +20,7 @@ class RESDataset(Dataset):
         
         # Extract necessary components for EGNN
         x = graph.pos  # Node coordinates
-        h = graph.node_feats  # Node features  
+        h = graph.x  # Node features  
         edge_index = graph.edge_index  # Graph connectivity
         y = graph.y  # Residue labels
         
