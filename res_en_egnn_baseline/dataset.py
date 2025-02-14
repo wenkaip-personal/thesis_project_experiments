@@ -19,13 +19,19 @@ class RESDataset(Dataset):
         item = self.dataset[idx]
         graph = self.transform(item)
         
+        # Convert the label to a tensor if it isn't already
+        if isinstance(graph.y, list):
+            label = torch.tensor(graph.y, dtype=torch.long)
+        else:
+            label = graph.y
+        
         # Create a PyTorch Geometric Data object
         data = Data(
             x=graph.x,  # Node features
             pos=graph.pos,  # Node coordinates 
             edge_index=graph.edge_index,  # Graph connectivity
             edge_attr=graph.edge_attr,  # Edge attributes/weights
-            y=graph.y  # Residue labels
+            y=label  # Residue labels as tensor
         )
         
         return data
