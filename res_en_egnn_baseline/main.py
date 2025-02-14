@@ -21,24 +21,21 @@ def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss = 0
     
-    for h, x, edges, y in loader:
+    for batch in loader:
         optimizer.zero_grad()
         
         # Move data to device
-        h = h.to(device)
-        x = x.to(device)
-        edges = edges.to(device)
-        y = y.to(device)
+        batch = batch.to(device)
         
         # Forward pass
-        pred = model(h, x, edges)
-        loss = criterion(pred, y)
+        pred = model(batch.x, batch.pos, batch.edge_index)
+        loss = criterion(pred, batch.y)
         
         # Backward pass
         loss.backward()
         optimizer.step()
         
-        total_loss += loss.item() * loader.batch_size
+        total_loss += loss.item() * len(batch.y)
         
     return total_loss / len(loader.dataset)
 
@@ -49,23 +46,20 @@ def validate(model, loader, criterion, device):
     total = 0
     
     with torch.no_grad():
-        for h, x, edges, y in loader:
+        for batch in loader:
             # Move data to device
-            h = h.to(device)
-            x = x.to(device)
-            edges = edges.to(device)
-            y = y.to(device)
+            batch = batch.to(device)
             
             # Forward pass
-            pred = model(h, x, edges)
-            loss = criterion(pred, y)
+            pred = model(batch.x, batch.pos, batch.edge_index)
+            loss = criterion(pred, batch.y)
             
             # Calculate accuracy
             pred_class = pred.argmax(dim=1)
-            correct += (pred_class == y).sum().item()
-            total += y.size(0)
+            correct += (pred_class == batch.y).sum().item()
+            total += batch.y.size(0)
             
-            total_loss += loss.item() * loader.batch_size
+            total_loss += loss.item() * len(batch.y)
             
     accuracy = 100 * correct / total
     avg_loss = total_loss / len(loader.dataset)
