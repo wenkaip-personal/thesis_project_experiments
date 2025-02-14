@@ -1,7 +1,7 @@
 import argparse
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch_geometric.data import DataLoader
 import json
 from dataset import RESDataset
 from model import ResEGNN

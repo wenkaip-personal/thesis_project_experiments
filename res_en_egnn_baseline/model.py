@@ -8,6 +8,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
 from models.egnn.egnn_clean import EGNN
+from atom3d.models.mlp import MLP
 
 class ResEGNN(nn.Module):
     """EGNN model for residue identity prediction."""
@@ -21,11 +22,7 @@ class ResEGNN(nn.Module):
                         device=device)
         
         # Final MLP to predict residue class
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf),
-            nn.ReLU(),
-            nn.Linear(hidden_nf, out_node_nf)
-        )
+        self.mlp = MLP(hidden_nf, [hidden_nf], out_node_nf)
         
         self.to(device)
 
