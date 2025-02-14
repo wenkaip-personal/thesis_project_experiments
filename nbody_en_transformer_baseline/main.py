@@ -3,7 +3,7 @@ import torch
 from torch import nn, optim
 import json
 from dataset import NBodyTransformerDataset
-from model import NBodyTransformer
+from model import NBodyTransformer_vel
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -138,7 +138,7 @@ def main():
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size)
     
     # Initialize model
-    model = NBodyTransformer(
+    model = NBodyTransformer_vel(
         hidden_nf=args.hidden_nf,
         n_layers=args.n_layers,
         n_heads=args.n_heads,
