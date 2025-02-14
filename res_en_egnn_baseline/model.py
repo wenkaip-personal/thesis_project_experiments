@@ -32,15 +32,8 @@ class ResEGNN(nn.Module):
         x: Node coordinates [n_nodes, 3] 
         edges: Graph connectivity [2, n_edges]
         """
-        # Calculate edge weights
-        row, col = edges
-        
-        # Compute radial distances
-        rel_pos = x[row] - x[col]
-        edge_attr = torch.sum(rel_pos ** 2, dim=-1, keepdim=True)  # [n_edges, 1]
-        
         # Apply EGNN
-        h, x = self.egnn(h, x, edges, edge_attr)
+        h, x = self.egnn(h, x, edges, edge_attr=None)
         
         # Predict residue class 
         out = self.mlp(h)
