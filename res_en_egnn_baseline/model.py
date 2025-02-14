@@ -32,9 +32,12 @@ class ResEGNN(nn.Module):
         x: Node coordinates [n_nodes, 3] 
         edges: Graph connectivity [2, n_edges]
         """
-        # Calculate edge weights based on distances
+        # Calculate edge weights
         row, col = edges
-        edge_attr = 1.0 / (torch.sqrt(((x[row] - x[col])**2).sum(dim=1, keepdim=True)) + 1e-5)
+        
+        # Compute radial distances
+        rel_pos = x[row] - x[col]
+        edge_attr = torch.sum(rel_pos ** 2, dim=-1, keepdim=True)  # [n_edges, 1]
         
         # Apply EGNN
         h, x = self.egnn(h, x, edges, edge_attr)
