@@ -29,13 +29,17 @@ class ResEGNN(nn.Module):
     def forward(self, h, x, edges):
         """
         h: Node features [n_nodes, in_node_nf]
-        x: Node coordinates [n_nodes, 3]
+        x: Node coordinates [n_nodes, 3] 
         edges: Graph connectivity [2, n_edges]
         """
-        # Apply EGNN
-        h, x = self.egnn(h, x, edges)
+        # Calculate edge weights based on distances
+        row, col = edges
+        edge_attr = 1.0 / (torch.sqrt(((x[row] - x[col])**2).sum(dim=1, keepdim=True)) + 1e-5)
         
-        # Predict residue class
+        # Apply EGNN
+        h, x = self.egnn(h, x, edges, edge_attr)
+        
+        # Predict residue class 
         out = self.mlp(h)
         
         return out

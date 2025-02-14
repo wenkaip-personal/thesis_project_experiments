@@ -22,8 +22,9 @@ class RESDataset(Dataset):
         # Create a PyTorch Geometric Data object
         data = Data(
             x=graph.x,  # Node features
-            pos=graph.pos,  # Node coordinates
+            pos=graph.pos,  # Node coordinates 
             edge_index=graph.edge_index,  # Graph connectivity
+            edge_attr=graph.edge_attr,  # Edge attributes/weights
             y=graph.y  # Residue labels
         )
         
