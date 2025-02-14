@@ -89,7 +89,7 @@ def main():
     
     # Get input/output dimensions from data
     sample = next(iter(train_loader))
-    in_node_nf = sample[0].size(-1)  # Input feature dimension
+    in_node_nf = sample.x.size(-1)  # Input feature dimension from node features
     out_node_nf = 20  # Number of amino acid classes
     
     # Initialize model
