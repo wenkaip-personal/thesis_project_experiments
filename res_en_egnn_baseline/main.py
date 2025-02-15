@@ -10,10 +10,10 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default='res_egnn_baseline')
     parser.add_argument('--debug', action='store_true', help='Debug mode with small dataset')
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--hidden_nf', type=int, default=64)
+    parser.add_argument('--hidden_nf', type=int, default=128)
     parser.add_argument('--n_layers', type=int, default=4)
     return parser.parse_args()
 
@@ -132,6 +132,11 @@ def main():
     model.load_state_dict(torch.load(f'models/{args.exp_name}_best.pt'))
     test_loss, test_acc = validate(model, test_loader, criterion, device)
     print(f'\nTest Results: Loss: {test_loss:.4f}, Accuracy: {test_acc:.2f}%')
+    
+    # Save test results
+    test_results = {'test_loss': test_loss, 'test_acc': test_acc}
+    with open(f'results/{args.exp_name}_test_results.json', 'w') as f:
+        json.dump(test_results, f)
 
 if __name__ == '__main__':
     main()

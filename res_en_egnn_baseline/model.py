@@ -20,7 +20,7 @@ class ResEGNN(nn.Module):
                         device=device)
         
         # Final MLP to predict residue class
-        self.mlp = MLP(hidden_nf, [hidden_nf], out_node_nf)
+        self.mlp = MLP(hidden_nf, [64], out_node_nf)
         
         self.to(device)
 
