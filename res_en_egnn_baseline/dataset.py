@@ -19,11 +19,14 @@ class RESDataset(Dataset):
         item = self.dataset[idx]
         graph = self.transform(item)
         
-        # Convert the label to a tensor if it isn't already
-        if isinstance(graph.y, list):
+        # Ensure conversion to tensor
+        if not isinstance(graph.y, torch.Tensor):
             label = torch.tensor(graph.y, dtype=torch.long)
         else:
-            label = graph.y
+            label = graph.y.long()  # Ensure long dtype for classification
+
+        # Verify conversion
+        print(f"Label type after conversion: {type(label)}")
         
         # Create a PyTorch Geometric Data object
         data = Data(
