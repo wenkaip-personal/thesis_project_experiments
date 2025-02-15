@@ -18,8 +18,19 @@ class RESDataset(Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         graph = self.transform(item)
-
         label = torch.tensor(graph.y['label'], dtype=torch.long)
+        
+        # Get indices of central residues from subunit indices
+        central_indices = []
+        for indices in item['subunit_indices']:
+            # Find the CA atom index for each central residue
+            ca_idx = None
+            for idx in indices:
+                if item['atoms'].iloc[idx]['name'] == 'CA':
+                    ca_idx = idx
+                    break
+            if ca_idx is not None:
+                central_indices.append(ca_idx)
         
         # Create a PyTorch Geometric Data object
         data = Data(
@@ -27,7 +38,8 @@ class RESDataset(Dataset):
             pos=graph.pos,  # Node coordinates 
             edge_index=graph.edge_index,  # Graph connectivity
             edge_attr=graph.edge_attr,  # Edge attributes/weights
-            y=label  # Residue labels
+            y=label,  # Residue labels
+            central_indices=torch.tensor(central_indices, dtype=torch.long)  # Indices of central residues
         )
-        
+
         return data

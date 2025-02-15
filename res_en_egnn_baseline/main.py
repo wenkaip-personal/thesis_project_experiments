@@ -27,8 +27,8 @@ def train_epoch(model, loader, optimizer, criterion, device):
         # Move data to device
         batch = batch.to(device)
         
-        # Forward pass
-        pred = model(batch.x, batch.pos, batch.edge_index)
+        # Forward pass - only get predictions for central residues
+        pred = model(batch.x, batch.pos, batch.edge_index, batch.central_indices)
         loss = criterion(pred, batch.y)
         
         # Backward pass
@@ -51,7 +51,7 @@ def validate(model, loader, criterion, device):
             batch = batch.to(device)
             
             # Forward pass
-            pred = model(batch.x, batch.pos, batch.edge_index)
+            pred = model(batch.x, batch.pos, batch.edge_index, batch.central_indices)
             loss = criterion(pred, batch.y)
             
             # Calculate accuracy
