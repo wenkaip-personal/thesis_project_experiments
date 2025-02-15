@@ -3,7 +3,7 @@ from torch.utils.data import Dataset
 import atom3d.datasets as da
 import atom3d.util.graph as gr
 import atom3d.util.transforms as tr
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Data
 
 class RESDataset(Dataset):
     """Dataset for residue identity prediction using EGNN."""
@@ -19,8 +19,7 @@ class RESDataset(Dataset):
         item = self.dataset[idx]
         graph = self.transform(item)
 
-        # Verify conversion
-        print(f"Label type: {type(graph.y['label'])}")
+        label = torch.tensor(graph.y['label'], dtype=torch.long)
         
         # Create a PyTorch Geometric Data object
         data = Data(
@@ -28,7 +27,7 @@ class RESDataset(Dataset):
             pos=graph.pos,  # Node coordinates 
             edge_index=graph.edge_index,  # Graph connectivity
             edge_attr=graph.edge_attr,  # Edge attributes/weights
-            y=graph.y['label']  # Residue labels
+            y=label  # Residue labels
         )
         
         return data

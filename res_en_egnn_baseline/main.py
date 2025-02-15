@@ -23,10 +23,6 @@ def train_epoch(model, loader, optimizer, criterion, device):
     
     for batch in loader:
         optimizer.zero_grad()
-
-        # Verify data types before processing
-        print(f"Batch y type: {type(batch.y)}")
-        print(f"Batch y device: {batch.y.device if isinstance(batch.y, torch.Tensor) else 'Not a tensor'}")
         
         # Move data to device
         batch = batch.to(device)
