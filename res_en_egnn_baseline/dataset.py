@@ -18,15 +18,9 @@ class RESDataset(Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         graph = self.transform(item)
-        
-        # Ensure conversion to tensor
-        if not isinstance(graph.y, torch.Tensor):
-            label = torch.tensor(graph.y, dtype=torch.long)
-        else:
-            label = graph.y.long()  # Ensure long dtype for classification
 
         # Verify conversion
-        print(f"Label type after conversion: {type(label)}")
+        print(f"Label type: {type(graph.y['label'])}")
         
         # Create a PyTorch Geometric Data object
         data = Data(
@@ -34,7 +28,7 @@ class RESDataset(Dataset):
             pos=graph.pos,  # Node coordinates 
             edge_index=graph.edge_index,  # Graph connectivity
             edge_attr=graph.edge_attr,  # Edge attributes/weights
-            y=label  # Residue labels as tensor
+            y=graph.y['label']  # Residue labels
         )
         
         return data
