@@ -10,17 +10,15 @@ class RESDataset(Dataset):
     
     def __init__(self, lmdb_path, transform=None):
         self.dataset = da.load_dataset(lmdb_path, 'lmdb')
-        self.transform = transform if transform else tr.GraphTransform(atom_key='atoms', label_key='labels')
+        self.transform = transform
     
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx):
         item = self.dataset[idx]
-        graph = self.transform(item)
-        label = torch.tensor(graph.y['label'], dtype=torch.long)
         
-        # Get indices of central residues from subunit indices
+        # First get the central residue indices from the raw dataframe
         central_indices = []
         for indices in item['subunit_indices']:
             # Find the CA atom index for each central residue
@@ -31,6 +29,13 @@ class RESDataset(Dataset):
                     break
             if ca_idx is not None:
                 central_indices.append(ca_idx)
+        
+        # Then apply the graph transform
+        if self.transform is None:
+            self.transform = tr.GraphTransform(atom_key='atoms', label_key='labels')
+        graph = self.transform(item)
+        
+        label = torch.tensor(graph.y['label'], dtype=torch.long)
         
         # Create a PyTorch Geometric Data object
         data = Data(
