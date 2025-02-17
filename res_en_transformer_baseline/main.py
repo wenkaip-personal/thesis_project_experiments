@@ -124,20 +124,20 @@ def main():
         # Save best model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), f'models/{args.exp_name}_best.pt')
+            torch.save(model.state_dict(), f'res_en_transformer_baseline/models/{args.exp_name}_best.pt')
         
         # Save results
-        with open(f'results/{args.exp_name}_results.json', 'w') as f:
+        with open(f'res_en_transformer_baseline/results/{args.exp_name}_results.json', 'w') as f:
             json.dump(results, f)
     
     # Test best model
-    model.load_state_dict(torch.load(f'models/{args.exp_name}_best.pt'))
+    model.load_state_dict(torch.load(f'res_en_transformer_baseline/models/{args.exp_name}_best.pt'))
     test_loss, test_acc = validate(model, test_loader, criterion, device)
     print(f'\nTest Results: Loss: {test_loss:.4f}, Accuracy: {test_acc:.2f}%')
     
     # Save test results
     test_results = {'test_loss': test_loss, 'test_acc': test_acc}
-    with open(f'results/{args.exp_name}_test_results.json', 'w') as f:
+    with open(f'res_en_transformer_baseline/results/{args.exp_name}_test_results.json', 'w') as f:
         json.dump(test_results, f)
 
 if __name__ == '__main__':
