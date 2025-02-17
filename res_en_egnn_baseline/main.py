@@ -71,7 +71,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Load datasets
-    base_path = '/Users/wenkaipan/Desktop/thesis_project/atom3d_res_dataset/split-by-cath-topology/data'
+    base_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/split-by-cath-topology/data'
     train_dataset = RESDataset(f'{base_path}/train')
     val_dataset = RESDataset(f'{base_path}/val')
     test_dataset = RESDataset(f'{base_path}/test')
