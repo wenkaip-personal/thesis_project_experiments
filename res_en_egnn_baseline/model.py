@@ -31,8 +31,6 @@ class ResEGNN(nn.Module):
         edges: Graph connectivity [2, n_edges]
         central_indices: Indices of central residues [n_central_residues]
         """
-        print(x.shape)
-
         # Apply EGNN to get node embeddings for all atoms
         h, x = self.egnn(h, x, edges, edge_attr=None)
         
