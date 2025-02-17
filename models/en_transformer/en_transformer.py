@@ -25,7 +25,7 @@ class EnAttention(nn.Module):
         )
         
         # Edge network
-        edge_input_dim = hidden_nf * 2 + 1  # +1 for radial distances
+        edge_input_dim = input_nf * 2 + 1  # +1 for radial distances
         self.edge_mlp = nn.Sequential(
             nn.Linear(edge_input_dim, hidden_nf),
             nn.SiLU(),
@@ -46,7 +46,7 @@ class EnAttention(nn.Module):
         rel_dist = torch.sum(rel_pos ** 2, dim=-1, keepdim=True)  # [n_edges, 1]
         
         # Process edges
-        edge_attr = torch.cat([h[row], h[col], rel_dist], dim=-1)  # [n_edges, hidden_nf * 2 + 1]
+        edge_attr = torch.cat([h[row], h[col], rel_dist], dim=-1)  # [n_edges, input_nf * 2 + 1]
         edge_features = self.edge_mlp(edge_attr)  # [n_edges, hidden_nf]
         
         # Feature attention
