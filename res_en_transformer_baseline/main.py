@@ -92,9 +92,6 @@ def main():
     sample = next(iter(train_loader))
     in_node_nf = sample.x.size(-1)  # Input feature dimension from node features
     out_node_nf = 20  # Number of amino acid classes
-
-    print(f"Input node feature dimension: {in_node_nf}")
-    print(f"Hidden node feature dimension: {args.hidden_nf}")
     
     # Initialize model
     model = ResEnTransformer(

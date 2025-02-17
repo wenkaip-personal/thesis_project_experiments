@@ -74,12 +74,12 @@ class EnAttention(nn.Module):
         return feats, coor_out
 
 class EnTransformerLayer(nn.Module):
-    """
-    Complete E(n)-Transformer layer with attention and feedforward.
-    """
     def __init__(self, input_nf, output_nf, hidden_nf, n_heads=4, dim_head=64):
         super().__init__()
         self.attention = EnAttention(input_nf, output_nf, hidden_nf, n_heads, dim_head)
+        
+        # Add projection layer for residual connection if dimensions don't match
+        self.proj = nn.Linear(input_nf, output_nf) if input_nf != output_nf else nn.Identity()
         
         # Feedforward network
         self.ff = nn.Sequential(
@@ -96,7 +96,7 @@ class EnTransformerLayer(nn.Module):
         # Attention
         h_norm = self.norm1(h)
         h_attn, x_update = self.attention(h_norm, x, edge_index)
-        h = h + h_attn  # Residual connection
+        h = self.proj(h) + h_attn  # Project h to match h_attn dimensions
         x = x + x_update  # Update coordinates
         
         # Feedforward
