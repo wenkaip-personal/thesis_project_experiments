@@ -5,6 +5,7 @@ from torch_geometric.loader import DataLoader
 import json
 from dataset import RESDataset
 from model import ResEnTransformer
+from functools import partial
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -16,6 +17,8 @@ def get_args():
     parser.add_argument('--hidden_nf', type=int, default=128)
     parser.add_argument('--n_layers', type=int, default=4)
     parser.add_argument('--n_heads', type=int, default=4)
+    parser.add_argument('--data_path', type=str, default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
+    parser.add_argument('--split_path', type=str, default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/')
     return parser.parse_args()
 
 def train_epoch(model, loader, optimizer, criterion, device):
@@ -72,10 +75,12 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Load datasets
-    base_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/split-by-cath-topology/data'
-    train_dataset = RESDataset(f'{base_path}/train')
-    val_dataset = RESDataset(f'{base_path}/val')  
-    test_dataset = RESDataset(f'{base_path}/test')
+    data_path = args.data_path
+    split_path = args.split_path
+    dataset = partial(RESDataset, data_path) 
+    train_dataset = dataset(split_path=split_path + 'train_indices.txt')
+    val_dataset = dataset(split_path=split_path + 'val_indices.txt')  
+    test_dataset = dataset(split_path=split_path + 'test_indices.txt')
     
     # If debug mode, use small subset
     if args.debug:
