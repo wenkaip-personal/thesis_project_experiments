@@ -29,7 +29,10 @@ def train_epoch(model, loader, optimizer, criterion, device):
         batch = batch.to(device)
         optimizer.zero_grad()
         
-        pred = model(batch.atoms, batch.x, batch.edge_index, batch)
+        # Convert atoms tensor to float before passing to model
+        atoms_float = batch.atoms.float()
+        
+        pred = model(atoms_float, batch.x, batch.edge_index, batch)
         loss = criterion(pred, batch.label)
         
         loss.backward()
@@ -48,14 +51,14 @@ def validate(model, loader, criterion, device):
     
     with torch.no_grad():
         for batch in loader:
-            # Move data to device
             batch = batch.to(device)
             
-            # Forward pass
-            pred = model(batch.atoms, batch.x, batch.edge_index, batch)
+            # Convert atoms tensor to float before passing to model
+            atoms_float = batch.atoms.float()
+            
+            pred = model(atoms_float, batch.x, batch.edge_index, batch)
             loss = criterion(pred, batch.label)
             
-            # Calculate accuracy
             pred_class = pred.argmax(dim=1)
             correct += (pred_class == batch.label).sum().item()
             
