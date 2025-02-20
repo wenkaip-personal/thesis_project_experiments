@@ -30,11 +30,12 @@ def train_epoch(model, loader, optimizer, criterion, device):
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        # Convert atoms tensor to float before passing to model
-        atoms_float = batch.atoms.float()
+        # Convert atoms tensor to float and ensure it requires gradients
+        atoms_float = batch.atoms.float().requires_grad_()
+        x = batch.x.requires_grad_()
         
         # Forward pass - only get predictions for central residues
-        pred = model(atoms_float, batch.x, batch.edge_index, batch)
+        pred = model(atoms_float, x, batch.edge_index, batch)
         loss = criterion(pred, batch.label)
         
         # Backward pass
