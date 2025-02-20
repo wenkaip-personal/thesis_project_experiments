@@ -13,8 +13,8 @@ from atom3d.models.mlp import MLP
 class ResEGNN(nn.Module):
     def __init__(self, in_node_nf, hidden_nf, out_node_nf, n_layers=4, device='cuda'):
         super().__init__()
-        self.egnn = EGNN(in_node_nf=in_node_nf,  # Use the actual input dimension
-                        hidden_nf=hidden_nf,
+        self.egnn = EGNN(in_node_nf=in_node_nf,
+                        hidden_nf=hidden_nf, 
                         out_node_nf=hidden_nf,
                         n_layers=n_layers,
                         device=device)
@@ -23,10 +23,15 @@ class ResEGNN(nn.Module):
         self.to(device)
 
     def forward(self, h, x, edges, batch):
-        # Reshape h to be [n_nodes, 1] instead of [1, n_nodes]
-        h = h.unsqueeze(-1) if h.dim() == 1 else h
+        print(h.shape)
 
-        # Apply EGNN to get node embeddings
+        # Ensure input dimensions are correct
+        if h.dim() == 1:
+            h = h.unsqueeze(-1)
+
+        print(h.shape)
+            
+        # Apply EGNN
         h, x = self.egnn(h, x, edges, edge_attr=None)
         
         # Select embeddings for central alpha carbons
