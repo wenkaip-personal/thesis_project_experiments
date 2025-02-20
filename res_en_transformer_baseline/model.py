@@ -28,18 +28,18 @@ class ResEnTransformer(nn.Module):
         
         self.to(device)
 
-    def forward(self, h, x, edges, central_indices):
+    def forward(self, h, x, edges, batch):
         """
         h: Node features [n_nodes, input_nf]
         x: Node coordinates [n_nodes, 3]
         edges: Graph connectivity [2, n_edges]
-        central_indices: Indices of central residues [n_central_residues]
+        batch: Graph containing ca_idx for central residue position
         """
         # Apply En Transformer to get node embeddings for all atoms
         h, x = self.transformer(h, x, edges)
         
         # Select only the embeddings for central residues
-        central_h = h[central_indices]
+        central_h = h[batch.ca_idx]
         
         # Predict residue class for central residues only 
         out = self.mlp(central_h)

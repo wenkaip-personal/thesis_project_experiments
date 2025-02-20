@@ -24,30 +24,30 @@ def get_args():
 def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss = 0
+    n_samples = 0
     
     for batch in loader:
+        batch = batch.to(device)
         optimizer.zero_grad()
         
-        # Move data to device
-        batch = batch.to(device)
-        
         # Forward pass - only get predictions for central residues
-        pred = model(batch.x, batch.pos, batch.edge_index, batch.central_indices)
-        loss = criterion(pred, batch.y)
+        pred = model(batch.atoms, batch.x, batch.edge_index, batch)
+        loss = criterion(pred, batch.label)
         
         # Backward pass
         loss.backward()
         optimizer.step()
         
-        total_loss += loss.item() * len(batch.y)
+        total_loss += loss.item() * batch.label.size(0)
+        n_samples += batch.label.size(0)
         
-    return total_loss / len(loader.dataset)
+    return total_loss / n_samples
 
 def validate(model, loader, criterion, device):
     model.eval()
     total_loss = 0
+    n_samples = 0
     correct = 0
-    total = 0
     
     with torch.no_grad():
         for batch in loader:
@@ -55,18 +55,18 @@ def validate(model, loader, criterion, device):
             batch = batch.to(device)
             
             # Forward pass
-            pred = model(batch.x, batch.pos, batch.edge_index, batch.central_indices)
-            loss = criterion(pred, batch.y)
+            pred = model(batch.atoms, batch.x, batch.edge_index, batch)
+            loss = criterion(pred, batch.label)
             
             # Calculate accuracy
             pred_class = pred.argmax(dim=1)
-            correct += (pred_class == batch.y).sum().item()
-            total += batch.y.size(0)
+            correct += (pred_class == batch.label).sum().item()
             
-            total_loss += loss.item() * len(batch.y)
-            
-    accuracy = 100 * correct / total
-    avg_loss = total_loss / len(loader.dataset)
+            total_loss += loss.item() * batch.label.size(0)
+            n_samples += batch.label.size(0)
+
+    accuracy = 100 * correct / n_samples
+    avg_loss = total_loss / n_samples
     
     return avg_loss, accuracy
 
@@ -88,14 +88,14 @@ def main():
         val_dataset = torch.utils.data.Subset(val_dataset, range(50))
         test_dataset = torch.utils.data.Subset(test_dataset, range(50))
     
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    # Create dataloaders - note we don't shuffle since it's an IterableDataset
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
     
     # Get input/output dimensions from data
-    sample = next(iter(train_loader))
-    in_node_nf = sample.x.size(-1)  # Input feature dimension from node features
+    sample_batch = next(iter(train_loader))
+    in_node_nf = sample_batch.atoms.size(-1)  # Input feature dimension from atom features
     out_node_nf = 20  # Number of amino acid classes
     
     # Initialize model

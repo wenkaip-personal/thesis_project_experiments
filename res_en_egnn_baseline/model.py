@@ -24,18 +24,18 @@ class ResEGNN(nn.Module):
         
         self.to(device)
 
-    def forward(self, h, x, edges, central_indices):
+    def forward(self, h, x, edges, batch):
         """
         h: Node features [n_nodes, in_node_nf]
         x: Node coordinates [n_nodes, 3] 
         edges: Graph connectivity [2, n_edges]
-        central_indices: Indices of central residues [n_central_residues]
+        batch: Graph containing ca_idx for central residue position
         """
         # Apply EGNN to get node embeddings for all atoms
         h, x = self.egnn(h, x, edges, edge_attr=None)
         
-        # Select only the embeddings for central residues
-        central_h = h[central_indices]
+        # Select embeddings for central alpha carbons
+        central_h = h[batch.ca_idx]
         
         # Predict residue class for central residues only
         out = self.mlp(central_h)
