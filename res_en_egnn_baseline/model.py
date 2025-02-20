@@ -23,6 +23,9 @@ class ResEGNN(nn.Module):
         self.to(device)
 
     def forward(self, h, x, edges, batch):
+        # Reshape h to be [n_nodes, 1] instead of [1, n_nodes]
+        h = h.unsqueeze(-1) if h.dim() == 1 else h
+
         # Apply EGNN to get node embeddings
         h, x = self.egnn(h, x, edges, edge_attr=None)
         
