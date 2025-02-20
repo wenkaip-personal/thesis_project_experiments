@@ -16,7 +16,7 @@ class ResEnTransformer(nn.Module):
         
         # Main En Transformer network
         self.transformer = EnTransformer(
-            input_nf=input_nf,
+            input_nf=1,
             output_nf=hidden_nf,
             hidden_nf=hidden_nf,
             n_layers=n_layers,
@@ -35,6 +35,9 @@ class ResEnTransformer(nn.Module):
         edges: Graph connectivity [2, n_edges]
         batch: Graph containing ca_idx for central residue position
         """
+        # Reshape h to be [n_nodes, 1] instead of [1, n_nodes]
+        h = h.unsqueeze(-1) if h.dim() == 1 else h
+        
         # Apply En Transformer to get node embeddings for all atoms
         h, x = self.transformer(h, x, edges)
         

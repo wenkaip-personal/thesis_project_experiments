@@ -99,9 +99,8 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size)
     
-    # Get input/output dimensions from data
-    sample_batch = next(iter(train_loader))
-    in_node_nf = sample_batch.atoms.size(-1)  # Input feature dimension from atom features
+    # Get input dimensions from data
+    in_node_nf = 1  # Since we're using one-hot encoded atoms
     out_node_nf = 20  # Number of amino acid classes
     
     # Initialize model
