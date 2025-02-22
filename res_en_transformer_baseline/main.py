@@ -10,9 +10,8 @@ from functools import partial
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default='res_en_transformer_baseline')
-    parser.add_argument('--debug', action='store_true', help='Debug mode with small dataset')
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=5)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--hidden_nf', type=int, default=128)
     parser.add_argument('--n_layers', type=int, default=4)
@@ -84,28 +83,10 @@ def main():
     # Load datasets
     data_path = args.data_path
     split_path = args.split_path
-    dataset = partial(RESDataset, data_path)
-
-    # Modified dataset loading with debug handling
-    if args.debug:
-        # For debug mode, read a smaller subset of indices
-        def read_limited_indices(filename, limit):
-            with open(filename) as f:
-                return ' '.join(f.read().split()[:limit])
-                
-        # Create temporary files with limited indices
-        train_indices = read_limited_indices(split_path + 'train_indices.txt', 100)
-        val_indices = read_limited_indices(split_path + 'val_indices.txt', 50) 
-        test_indices = read_limited_indices(split_path + 'test_indices.txt', 50)
-        
-        # Create datasets with limited indices
-        train_dataset = dataset(split_path=train_indices)
-        val_dataset = dataset(split_path=val_indices)
-        test_dataset = dataset(split_path=test_indices)
-    else:
-        train_dataset = dataset(split_path=split_path + 'train_indices.txt')
-        val_dataset = dataset(split_path=split_path + 'val_indices.txt')  
-        test_dataset = dataset(split_path=split_path + 'test_indices.txt')
+    dataset = partial(RESDataset, data_path) 
+    train_dataset = dataset(split_path=split_path + 'train_indices.txt')
+    val_dataset = dataset(split_path=split_path + 'val_indices.txt')
+    test_dataset = dataset(split_path=split_path + 'test_indices.txt')
     
     # Create dataloaders - note we don't shuffle since it's an IterableDataset
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size)
