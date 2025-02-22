@@ -23,13 +23,15 @@ class ResEGNN(nn.Module):
         self.to(device)
 
     def forward(self, h, x, edges, batch):
-        print(h.shape)
-
+        """
+        h: Node features [n_nodes, input_nf]
+        x: Node coordinates [n_nodes, 3]
+        edges: Graph connectivity [2, n_edges]
+        batch: Graph containing ca_idx for central residue position
+        """
         # Ensure input dimensions are correct
         if h.dim() == 1:
             h = h.unsqueeze(-1)
-
-        print(h.shape)
             
         # Apply EGNN
         h, x = self.egnn(h, x, edges, edge_attr=None)

@@ -84,16 +84,28 @@ def main():
     # Load datasets
     data_path = args.data_path
     split_path = args.split_path
-    dataset = partial(RESDataset, data_path) 
-    train_dataset = dataset(split_path=split_path + 'train_indices.txt')
-    val_dataset = dataset(split_path=split_path + 'val_indices.txt')  
-    test_dataset = dataset(split_path=split_path + 'test_indices.txt')
-    
-    # If debug mode, use small subset
+    dataset = partial(RESDataset, data_path)
+
+    # Modified dataset loading with debug handling
     if args.debug:
-        train_dataset = torch.utils.data.Subset(train_dataset, range(100))
-        val_dataset = torch.utils.data.Subset(val_dataset, range(50))
-        test_dataset = torch.utils.data.Subset(test_dataset, range(50))
+        # For debug mode, read a smaller subset of indices
+        def read_limited_indices(filename, limit):
+            with open(filename) as f:
+                return ' '.join(f.read().split()[:limit])
+                
+        # Create temporary files with limited indices
+        train_indices = read_limited_indices(split_path + 'train_indices.txt', 100)
+        val_indices = read_limited_indices(split_path + 'val_indices.txt', 50) 
+        test_indices = read_limited_indices(split_path + 'test_indices.txt', 50)
+        
+        # Create datasets with limited indices
+        train_dataset = dataset(split_path=train_indices)
+        val_dataset = dataset(split_path=val_indices)
+        test_dataset = dataset(split_path=test_indices)
+    else:
+        train_dataset = dataset(split_path=split_path + 'train_indices.txt')
+        val_dataset = dataset(split_path=split_path + 'val_indices.txt')  
+        test_dataset = dataset(split_path=split_path + 'test_indices.txt')
     
     # Create dataloaders - note we don't shuffle since it's an IterableDataset
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size)

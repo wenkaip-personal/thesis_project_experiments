@@ -35,8 +35,9 @@ class ResEnTransformer(nn.Module):
         edges: Graph connectivity [2, n_edges]
         batch: Graph containing ca_idx for central residue position
         """
-        # Reshape h to be [n_nodes, 1] instead of [1, n_nodes]
-        h = h.unsqueeze(-1) if h.dim() == 1 else h
+        # Ensure input dimensions are correct
+        if h.dim() == 1:
+            h = h.unsqueeze(-1)
 
         # Apply En Transformer to get node embeddings for all atoms
         h, x = self.transformer(h, x, edges)
