@@ -23,6 +23,8 @@ class ResEGNN(nn.Module):
             device: Device to run model on
         """
         super().__init__()
+
+        self.embed = nn.Embedding(in_node_nf, in_node_nf)
         
         # Core EGNN network
         self.egnn = EGNN(in_node_nf=in_node_nf,
@@ -52,6 +54,8 @@ class ResEGNN(nn.Module):
             edges: Graph connectivity [2, n_edges]
             batch: Graph batch containing ca_idx for central residue position
         """
+        h = self.embed(h)
+
         # Get edge attributes from batch
         edge_attr = batch.edge_s
             

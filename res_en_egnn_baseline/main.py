@@ -121,7 +121,7 @@ def test(model, test_dataset):
 
 def forward(model, batch, device):
     batch = batch.to(device)
-    return model(batch.atoms.float(), batch.x, batch.edge_index, batch)
+    return model(batch.atoms, batch.x, batch.edge_index, batch)
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}

@@ -12,6 +12,8 @@ from models.en_transformer.en_transformer import EnTransformer
 class ResEnTransformer(nn.Module):
     def __init__(self, input_nf = 9, output_nf = 20, hidden_nf = 128, n_layers=4, n_heads=4, device='cuda'):
         super().__init__()
+
+        self.embed = nn.Embedding(input_nf, input_nf)
         
         # Main En Transformer network
         self.transformer = EnTransformer(
@@ -42,6 +44,8 @@ class ResEnTransformer(nn.Module):
             edges: Graph connectivity [2, n_edges]
             batch: Graph batch containing ca_idx for central residue position
         """
+        h = self.embed(h)
+
         # Apply En Transformer to get node embeddings for all atoms
         h, x = self.transformer(h, x, edges)
 
