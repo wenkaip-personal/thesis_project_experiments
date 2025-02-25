@@ -62,13 +62,19 @@ def loop(dataset, model, optimizer=None, max_time=None):
             torch.cuda.empty_cache()
             print('Skipped batch due to OOM')
             continue
-            
-        loss_value = loss_fn(out, batch.label)
+        
+        # Convert the label to a tensor and ensure proper batch dimension
+        batch_label = torch.tensor([batch.label], device=device)
+        # Add batch dimension to output
+        out_batched = out.unsqueeze(0)
+        loss_value = loss_fn(out_batched, batch_label)
+        
         total_loss += float(loss_value)
         total_count += 1
         
-        pred_class = out.argmax(dim=-1)
-        targets.extend(list(batch.label.cpu().numpy()))
+        # Adjust prediction to match batched format
+        pred_class = out_batched.argmax(dim=-1)
+        targets.append(batch.label)
         predicts.extend(list(pred_class.cpu().numpy()))
 
         if optimizer:
