@@ -51,8 +51,5 @@ class ResEnTransformer(nn.Module):
 
         # Get class logits
         out = self.mlp(h)
-
-        # Extract central alpha carbon indices
-        central_residue_idx = batch.ca_idx + batch.ptr[:-1]
         
-        return out[central_residue_idx]
+        return out[batch.ca_idx]
