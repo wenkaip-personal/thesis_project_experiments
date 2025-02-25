@@ -113,19 +113,18 @@ class BaseTransform:
         
         :return: `torch_geometric.data.Data` structure graph
         '''
-        with torch.no_grad():
-            coords = torch.as_tensor(df[['x', 'y', 'z']].to_numpy(),
-                                     dtype=torch.float32, device=self.device)
-            atoms = torch.as_tensor(list(map(_element_mapping, df.element)),
-                                            dtype=torch.long, device=self.device)
+        coords = torch.as_tensor(df[['x', 'y', 'z']].to_numpy(),
+                                    dtype=torch.float32, device=self.device)
+        atoms = torch.as_tensor(list(map(_element_mapping, df.element)),
+                                        dtype=torch.long, device=self.device)
 
-            edge_index = torch_cluster.radius_graph(coords, r=self.edge_cutoff)
+        edge_index = torch_cluster.radius_graph(coords, r=self.edge_cutoff)
 
-            edge_s, edge_v = _edge_features(coords, edge_index, 
-                                D_max=self.edge_cutoff, num_rbf=self.num_rbf, device=self.device)
+        edge_s, edge_v = _edge_features(coords, edge_index, 
+                            D_max=self.edge_cutoff, num_rbf=self.num_rbf, device=self.device)
 
-            return torch_geometric.data.Data(x=coords, atoms=atoms,
-                        edge_index=edge_index, edge_s=edge_s, edge_v=edge_v)
+        return torch_geometric.data.Data(x=coords, atoms=atoms,
+                    edge_index=edge_index, edge_s=edge_s, edge_v=edge_v)
 
 class RESDataset(IterableDataset):
     '''
@@ -163,20 +162,18 @@ class RESDataset(IterableDataset):
     
     def _dataset_generator(self, indices, shuffle=True):
         if shuffle: random.shuffle(indices)
-        with torch.no_grad():
-            for idx in indices:
-                data = self.dataset[self.idx[idx]]
-                atoms = data['atoms']
-                for sub in data['labels'].itertuples():
-                    _, num, aa = sub.subunit.split('_')
-                    num, aa = int(num), _amino_acids(aa)
-                    if aa == 20: continue
-                    my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
-                    ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
-                    if len(ca_idx) != 1: continue
-                        
-                    with torch.no_grad():
-                        graph = self.transform(my_atoms)
-                        graph.label = aa
-                        graph.ca_idx = int(ca_idx)
-                        yield graph
+        for idx in indices:
+            data = self.dataset[self.idx[idx]]
+            atoms = data['atoms']
+            for sub in data['labels'].itertuples():
+                _, num, aa = sub.subunit.split('_')
+                num, aa = int(num), _amino_acids(aa)
+                if aa == 20: continue
+                my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
+                ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
+                if len(ca_idx) != 1: continue
+                
+                graph = self.transform(my_atoms)
+                graph.label = aa
+                graph.ca_idx = int(ca_idx)
+                yield graph

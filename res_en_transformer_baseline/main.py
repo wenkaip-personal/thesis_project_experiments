@@ -130,11 +130,8 @@ def test(model, test_dataset):
 def forward(model, batch, device):
     batch = batch.to(device)
     
-    # Create a copy of coordinates with gradients enabled
-    x = batch.x.clone().detach().requires_grad_(True)
-    
     # Pass the gradient-enabled coordinates to the model
-    return model(batch.atoms, x, batch.edge_index, batch)
+    return model(batch.atoms, batch.x, batch.edge_index, batch)
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}
