@@ -63,8 +63,8 @@ def loop(dataset, model, optimizer=None, max_time=None):
             print('Skipped batch due to OOM')
             continue
         
-        # Convert the label to a tensor and ensure proper batch dimension
-        batch_label = torch.tensor([batch.label], device=device)
+        # Convert the label to a tensor with long dtype for classification
+        batch_label = torch.tensor([batch.label], device=device, dtype=torch.long)
         # Add batch dimension to output
         out_batched = out.unsqueeze(0)
         loss_value = loss_fn(out_batched, batch_label)
@@ -127,7 +127,12 @@ def test(model, test_dataset):
 
 def forward(model, batch, device):
     batch = batch.to(device)
-    return model(batch.atoms, batch.x, batch.edge_index, batch)
+    
+    # Create a copy of coordinates with gradients enabled
+    x = batch.x.clone().detach().requires_grad_(True)
+    
+    # Pass the gradient-enabled coordinates to the model
+    return model(batch.atoms, x, batch.edge_index, batch)
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}
