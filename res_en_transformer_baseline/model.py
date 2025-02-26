@@ -48,7 +48,7 @@ class ResEnTransformer(nn.Module):
         
         # Create mask for atoms based on which protein they belong to
         # In PyTorch Geometric, batch.batch tells us which graph each node belongs to
-        if hasattr(batch, 'batch'):
+        if hasattr(batch, 'batch') and batch.batch is not None:
             # Create a mask where True indicates that a node is valid
             # Shape: [num_nodes]
             mask = torch.ones(h.size(0), dtype=torch.bool, device=h.device)

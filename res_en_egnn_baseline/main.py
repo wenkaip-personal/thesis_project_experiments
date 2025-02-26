@@ -30,6 +30,7 @@ import torch
 import torch.nn as nn
 import tqdm
 import time
+import torch_geometric
 from functools import partial
 from atom3d.util import metrics
 from dataset import RESDataset
@@ -142,6 +143,11 @@ def main():
     train_dataset = dataset(split_path=split_path + 'train_indices.txt')
     val_dataset = dataset(split_path=split_path + 'val_indices.txt')
     test_dataset = dataset(split_path=split_path + 'test_indices.txt')
+
+    datasets = train_dataset, val_dataset, test_dataset
+    dataloader = partial(torch_geometric.data.DataLoader, num_workers=args.num_workers, batch_size=args.batch)
+
+    train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 
     # Initialize model with correct dimensions
     model = ResEGNN(
