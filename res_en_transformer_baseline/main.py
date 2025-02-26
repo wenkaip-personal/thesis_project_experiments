@@ -130,7 +130,7 @@ def test(model, test_dataset):
 def forward(model, batch, device):
     batch = batch.to(device)
     
-    # Pass the gradient-enabled coordinates to the model
+    # Pass the batch to the model - now the model will handle masking internally
     return model(batch.atoms, batch.x, batch.edge_index, batch)
 
 def get_metrics():

@@ -45,9 +45,29 @@ class ResEnTransformer(nn.Module):
             batch: Graph batch containing ca_idx for central residue position
         """
         h = self.embed(h)
+        
+        # Create mask for atoms based on which protein they belong to
+        # In PyTorch Geometric, batch.batch tells us which graph each node belongs to
+        if hasattr(batch, 'batch'):
+            # Create a mask where True indicates that a node is valid
+            # Shape: [num_nodes]
+            mask = torch.ones(h.size(0), dtype=torch.bool, device=h.device)
+            
+            # If there are multiple graphs in the batch, we need to create a proper mask
+            if batch.batch.max() > 0:
+                unique_batches = batch.batch.unique()
+                for b_idx in unique_batches:
+                    # Get indices of all nodes in this batch
+                    batch_mask = (batch.batch == b_idx)
+                    # Update the mask to only include nodes from this batch
+                    mask = mask & batch_mask
+        else:
+            # If no batch information is available, assume all nodes are valid
+            mask = torch.ones(h.size(0), dtype=torch.bool, device=h.device)
 
         # Apply En Transformer to get node embeddings for all atoms
-        h, x = self.transformer(h, x, edges)
+        # Pass the mask to ensure attention is only computed within each protein
+        h, x = self.transformer(h, x, edges, mask=mask)
 
         # Get class logits
         out = self.mlp(h)

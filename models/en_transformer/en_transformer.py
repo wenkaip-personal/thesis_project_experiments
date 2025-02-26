@@ -33,11 +33,12 @@ class EnAttention(nn.Module):
             nn.SiLU()
         )
 
-    def forward(self, h, x, edge_index):
+    def forward(self, h, x, edge_index, mask=None):
         """
         h: Node features [n_nodes, input_nf]
         x: Node coordinates [n_nodes, 3]
         edge_index: Graph connectivity [2, n_edges]
+        mask: Binary mask indicating valid nodes [n_nodes] or [batch_size, n_nodes]
         """
         row, col = edge_index
         
@@ -55,6 +56,22 @@ class EnAttention(nn.Module):
         
         # Compute attention scores
         dots = torch.einsum('bhd,bjd->bhj', q, k) * (self.dim_head ** -0.5)
+        
+        # Apply mask to attention scores if provided
+        if mask is not None:
+            # Reshape mask for broadcasting
+            if mask.dim() == 1:
+                # If mask is [n_nodes]
+                mask_2d = mask.unsqueeze(0) * mask.unsqueeze(1)  # [1, n_nodes, n_nodes]
+            else:
+                # If mask is [batch_size, n_nodes]
+                mask_2d = mask.unsqueeze(1) * mask.unsqueeze(2)  # [batch_size, n_nodes, n_nodes]
+            
+            mask_2d = mask_2d.unsqueeze(1)  # [batch_size, 1, n_nodes, n_nodes] for heads
+            
+            # Set attention scores for masked tokens to -inf
+            dots = dots.masked_fill(~mask_2d, -1e9)
+        
         attn = F.softmax(dots, dim=-1)
         
         # Apply attention to values
@@ -64,6 +81,13 @@ class EnAttention(nn.Module):
         
         # Coordinate attention
         edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
+        
+        # Apply mask to coordinate weights if provided
+        if mask is not None:
+            # Create a mask for edges based on node mask
+            edge_mask = mask[row] & mask[col]  # [n_edges]
+            edge_weights = edge_weights.masked_fill(~edge_mask.unsqueeze(-1), -1e9)
+        
         coord_weights = F.softmax(edge_weights, dim=0)
         
         # Update coordinates while preserving E(n) equivariance
@@ -92,10 +116,10 @@ class EnTransformerLayer(nn.Module):
         self.norm1 = nn.LayerNorm(input_nf)
         self.norm2 = nn.LayerNorm(output_nf)
 
-    def forward(self, h, x, edge_index):
+    def forward(self, h, x, edge_index, mask=None):
         # Attention
         h_norm = self.norm1(h)
-        h_attn, x_update = self.attention(h_norm, x, edge_index)
+        h_attn, x_update = self.attention(h_norm, x, edge_index, mask=mask)
         h = self.proj(h) + h_attn  # Project h to match h_attn dimensions
         x = x + x_update  # Update coordinates
         
@@ -106,7 +130,7 @@ class EnTransformerLayer(nn.Module):
 
 class EnTransformer(nn.Module):
     """
-    Full E(n)-Transformer model with multiple layers.
+    Full E(n)-Transformer model with multiple layers and mask support.
     """
     def __init__(self, input_nf, output_nf, hidden_nf, n_layers=4, n_heads=4, dim_head=64):
         super().__init__()
@@ -121,12 +145,13 @@ class EnTransformer(nn.Module):
             for i in range(n_layers)
         ])
 
-    def forward(self, h, x, edge_index):
+    def forward(self, h, x, edge_index, mask=None):
         """
         h: Input node features [n_nodes, input_nf]
         x: Input coordinates [n_nodes, 3] 
         edge_index: Graph connectivity [2, n_edges]
+        mask: Optional binary mask indicating valid nodes [n_nodes] or [batch_size, n_nodes]
         """
         for layer in self.layers:
-            h, x = layer(h, x, edge_index)
+            h, x = layer(h, x, edge_index, mask=mask)
         return h, x
