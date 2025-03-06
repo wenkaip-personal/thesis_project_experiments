@@ -56,7 +56,7 @@ class EnAttention(nn.Module):
         q, k, v = map(lambda t: t.reshape(n_nodes, self.n_heads, self.dim_head), qkv)
         
         # Compute attention scores - correct einsum to produce [n_nodes, n_heads, n_nodes]
-        dots = torch.einsum('bhi,bji->bhj', q, k) * (self.dim_head ** -0.5)
+        dots = torch.einsum('ihd,jhd->ihj', q, k) * (self.dim_head ** -0.5)
         
         # Apply mask if provided
         if mask is not None:
