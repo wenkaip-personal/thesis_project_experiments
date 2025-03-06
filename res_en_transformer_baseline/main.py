@@ -99,7 +99,7 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                 continue
         
         batch_count += 1
-        t.set_description(f"Loss: {total_loss/total_count:.8f}")
+        t.set_description(f"{total_loss/total_count:.8f}")
         
     accuracy = metrics['accuracy'](targets, predicts)
     return total_loss / total_count, accuracy

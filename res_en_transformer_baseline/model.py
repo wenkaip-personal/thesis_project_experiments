@@ -10,7 +10,7 @@ sys.path.append(parent_dir)
 from models.en_transformer.en_transformer import EnTransformer
 
 class ResEnTransformer(nn.Module):
-    def __init__(self, input_nf = 9, output_nf = 20, hidden_nf = 128, n_layers=4, n_heads=4, device='cuda'):
+    def __init__(self, input_nf=9, output_nf=20, hidden_nf=128, n_layers=4, n_heads=4, device='cuda'):
         super().__init__()
 
         self.embed = nn.Embedding(input_nf, input_nf)
@@ -46,10 +46,11 @@ class ResEnTransformer(nn.Module):
         """
         h = self.embed(h)
         
-        mask = None
+        # Create mask where node_i and node_j are in the same graph
+        node_batch = batch.batch
+        mask = node_batch.unsqueeze(-1) == node_batch.unsqueeze(0)  # [n_nodes, n_nodes]
 
         # Apply En Transformer to get node embeddings for all atoms
-        # Pass the mask to ensure attention is only computed within each protein
         h, x = self.transformer(h, x, edges, mask=mask)
 
         # Get class logits

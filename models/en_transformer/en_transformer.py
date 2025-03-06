@@ -38,7 +38,7 @@ class EnAttention(nn.Module):
         h: Node features [n_nodes, input_nf]
         x: Node coordinates [n_nodes, 3]
         edge_index: Graph connectivity [2, n_edges]
-        mask: Binary mask indicating valid nodes [n_nodes] or [batch_size, n_nodes]
+        mask: Attention mask [n_nodes, n_nodes] or None
         """
         row, col = edge_index
         
@@ -57,10 +57,10 @@ class EnAttention(nn.Module):
         # Compute attention scores
         dots = torch.einsum('bhd,bjd->bhj', q, k) * (self.dim_head ** -0.5)
         
-        # Apply mask to attention scores if provided
+        # Apply mask if provided
         if mask is not None:
-            # Set attention scores for masked tokens to -inf
-            dots = dots.masked_fill(~mask, -1e9)
+            # Apply mask - set attention scores to large negative value where mask is False
+            dots = dots.masked_fill(~mask.unsqueeze(1), -1e9)
         
         attn = F.softmax(dots, dim=-1)
         
@@ -69,14 +69,14 @@ class EnAttention(nn.Module):
         feats = feats.reshape(-1, self.n_heads * self.dim_head)
         feats = self.to_out(feats)  # [n_nodes, output_nf]
         
-        # Coordinate attention
-        edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
-        
-        # Apply mask to coordinate weights if provided
+        # Coordinate attention - create mask for edges if needed
         if mask is not None:
-            # Create a mask for edges based on node mask
-            edge_mask = mask[row] & mask[col]  # [n_edges]
-            edge_weights = edge_weights.masked_fill(~edge_mask.unsqueeze(-1), -1e9)
+            # Create edge mask based on node mask
+            edge_mask = mask[row, col].unsqueeze(-1)  # [n_edges, 1]
+            edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
+            edge_weights = edge_weights.masked_fill(~edge_mask, -1e9)
+        else:
+            edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
         
         coord_weights = F.softmax(edge_weights, dim=0)
         
@@ -140,7 +140,7 @@ class EnTransformer(nn.Module):
         h: Input node features [n_nodes, input_nf]
         x: Input coordinates [n_nodes, 3] 
         edge_index: Graph connectivity [2, n_edges]
-        mask: Optional binary mask indicating valid nodes [n_nodes] or [batch_size, n_nodes]
+        mask: None
         """
         for layer in self.layers:
             h, x = layer(h, x, edge_index, mask=mask)
