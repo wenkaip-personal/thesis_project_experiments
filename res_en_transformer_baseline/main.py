@@ -26,6 +26,10 @@ parser.add_argument('--data_path', type=str,
 parser.add_argument('--split_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/')
 
+# Add debug mode flag
+parser.add_argument('--debug', action='store_true',
+                    help='enable debug mode with reduced dataset size and fewer epochs')
+
 args = parser.parse_args()
 
 import torch
@@ -42,7 +46,7 @@ print = partial(print, flush=True)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_id = float(time.time())
 
-def loop(dataset, model, optimizer=None, max_time=None):
+def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
     loss_fn = nn.CrossEntropyLoss()
     t = tqdm.tqdm(dataset)
@@ -50,7 +54,12 @@ def loop(dataset, model, optimizer=None, max_time=None):
     total_loss, total_count = 0, 0
     targets, predicts = [], []
 
+    batch_count = 0
     for batch in t:
+        # Add max_batches check for debug mode
+        if max_batches is not None and batch_count >= max_batches:
+            break
+
         if max_time and (time.time() - start) > 60*max_time: 
             break
             
@@ -90,7 +99,8 @@ def loop(dataset, model, optimizer=None, max_time=None):
                 torch.cuda.empty_cache()
                 print('Skipped batch due to OOM')
                 continue
-                
+        
+        batch_count += 1
         t.set_description(f"Loss: {total_loss/total_count:.8f}")
         
     accuracy = metrics['accuracy'](targets, predicts)
@@ -100,14 +110,20 @@ def train(model, train_dataset, val_dataset):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     best_val_loss, best_path = float('inf'), None
 
+    # Determine max batches for debug mode
+    train_batches = 10 if args.debug else None
+    val_batches = 5 if args.debug else None
+
     for epoch in range(args.epochs):
         model.train()
-        train_loss, train_acc = loop(train_dataset, model, optimizer=optimizer, max_time=args.train_time)
+        train_loss, train_acc = loop(train_dataset, model, optimizer=optimizer, 
+                                     max_time=args.train_time, max_batches=train_batches)
         print(f'\nEPOCH {epoch} TRAIN loss: {train_loss:.8f} acc: {train_acc:.2f}%')
 
         model.eval()
         with torch.no_grad():
-            val_loss, val_acc = loop(val_dataset, model, max_time=args.val_time)
+            val_loss, val_acc = loop(val_dataset, model, max_time=args.val_time, 
+                                     max_batches=val_batches)
         print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
 
         path = f'res_en_transformer_baseline/models/RES_{model_id}_{epoch}.pt'
@@ -121,9 +137,12 @@ def train(model, train_dataset, val_dataset):
 def test(model, test_dataset):
     model.load_state_dict(torch.load(args.test))
     model.eval()
+
+    # Determine max batches for debug mode
+    test_batches = 5 if args.debug else None
     
     with torch.no_grad():
-        test_loss, test_acc = loop(test_dataset, model)
+        test_loss, test_acc = loop(test_dataset, model, max_batches=test_batches)
     
     print(f"Test accuracy: {test_acc:.2f}%")
     print(f"Test loss: {test_loss:.8f}")
@@ -138,6 +157,13 @@ def get_metrics():
     return {'accuracy': metrics.accuracy}
 
 def main():
+    # Adjust parameters for debug mode
+    if args.debug:
+        print("Running in DEBUG mode")
+        args.epochs = min(args.epochs, 2)  # Reduce epochs for faster iteration
+        args.hidden_nf = 32  # Reduce hidden dimension size
+        args.n_layers = 2    # Reduce number of layers
+    
     # Load datasets
     data_path = args.data_path
     split_path = args.split_path
