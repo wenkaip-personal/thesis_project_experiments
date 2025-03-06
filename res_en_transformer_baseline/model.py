@@ -55,4 +55,4 @@ class ResEnTransformer(nn.Module):
         # Get class logits
         out = self.mlp(h)
         
-        return out[batch.ca_idx]
+        return out[batch.ca_idx + batch.ptr[:-1]]

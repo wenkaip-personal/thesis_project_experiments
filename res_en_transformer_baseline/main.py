@@ -75,19 +75,17 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             print('Skipped batch due to OOM')
             continue
         
-        # Convert the label to a tensor with long dtype for classification
-        batch_label = torch.tensor([batch.label], device=device, dtype=torch.long)
-        # Add batch dimension to output
-        out_batched = out.unsqueeze(0)
-        loss_value = loss_fn(out_batched, batch_label)
+        # Use batch.label directly - it's already a batched tensor
+        batch_label = batch.label.to(device)
+        loss_value = loss_fn(out, batch_label)
         
         total_loss += float(loss_value)
         total_count += 1
         
-        # Adjust prediction to match batched format
-        pred_class = out_batched.argmax(dim=-1)
-        targets.append(batch.label)
-        predicts.extend(list(pred_class.cpu().numpy()))
+        # Get predictions
+        pred_class = out.argmax(dim=-1)
+        targets.extend(batch_label.cpu().tolist())
+        predicts.extend(pred_class.cpu().tolist())
 
         if optimizer:
             try:
