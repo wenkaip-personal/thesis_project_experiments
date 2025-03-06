@@ -59,18 +59,8 @@ class EnAttention(nn.Module):
         
         # Apply mask to attention scores if provided
         if mask is not None:
-            # Reshape mask for broadcasting
-            if mask.dim() == 1:
-                # If mask is [n_nodes]
-                mask_2d = mask.unsqueeze(0) * mask.unsqueeze(1)  # [1, n_nodes, n_nodes]
-            else:
-                # If mask is [batch_size, n_nodes]
-                mask_2d = mask.unsqueeze(1) * mask.unsqueeze(2)  # [batch_size, n_nodes, n_nodes]
-            
-            mask_2d = mask_2d.unsqueeze(1)  # [batch_size, 1, n_nodes, n_nodes] for heads
-            
             # Set attention scores for masked tokens to -inf
-            dots = dots.masked_fill(~mask_2d, -1e9)
+            dots = dots.masked_fill(~mask, -1e9)
         
         attn = F.softmax(dots, dim=-1)
         

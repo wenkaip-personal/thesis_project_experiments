@@ -145,7 +145,7 @@ def main():
     test_dataset = dataset(split_path=split_path + 'test_indices.txt')
 
     datasets = train_dataset, val_dataset, test_dataset
-    dataloader = partial(torch_geometric.data.DataLoader, num_workers=args.num_workers, batch_size=args.batch)
+    dataloader = partial(torch_geometric.loader.DataLoader, num_workers=args.num_workers, batch_size=args.batch)
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 
