@@ -59,8 +59,10 @@ class EnAttention(nn.Module):
         
         # Apply mask if provided
         if mask is not None:
-            # Apply mask - set attention scores to large negative value where mask is False
-            dots = dots.masked_fill(~mask.unsqueeze(1).expand(-1, dots.size(1), -1), -1e9)
+            print(f"Mask shape: {mask.shape}, Dots shape: {dots.shape}")
+            mask_expanded = mask.unsqueeze(1).repeat(1, self.n_heads, 1)
+            print(f"Expanded mask shape: {mask_expanded.shape}")
+            dots = dots.masked_fill(~mask_expanded, -1e9)
         
         attn = F.softmax(dots, dim=-1)
         
