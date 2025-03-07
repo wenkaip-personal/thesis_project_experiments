@@ -38,9 +38,8 @@ class EnAttention(nn.Module):
         h: Node features [n_nodes, input_nf]
         x: Node coordinates [n_nodes, 3]
         edge_index: Graph connectivity [2, n_edges]
-        mask: Attention mask [n_nodes, n_nodes] or None
+        mask: None
         """
-        n_nodes = h.size(0)
         row, col = edge_index
         
         # Get relative positional encodings
@@ -53,32 +52,31 @@ class EnAttention(nn.Module):
         
         # Feature attention
         qkv = self.to_qkv(h).chunk(3, dim=-1)  # [n_nodes, n_heads * dim_head] each
-        q, k, v = map(lambda t: t.reshape(n_nodes, self.n_heads, self.dim_head), qkv)
+        q, k, v = map(lambda t: t.view(-1, self.n_heads, self.dim_head), qkv)
         
-        # Compute attention scores - correct einsum to produce [n_nodes, n_heads, n_nodes]
-        dots = torch.einsum('ihd,jhd->ihj', q, k) * (self.dim_head ** -0.5)
+        # Compute attention scores
+        dots = torch.einsum('bhd,bjd->bhj', q, k) * (self.dim_head ** -0.5)
         
-        # Apply mask if provided
+        # Apply mask to attention scores if provided
         if mask is not None:
-            # Fix mask expansion to match dots shape
-            mask_expanded = mask.unsqueeze(1)  # [n_nodes, 1, n_nodes]
-            dots = dots.masked_fill(~mask_expanded, -1e9)
+            # Set attention scores for masked tokens to -inf
+            dots = dots.masked_fill(~mask, -1e9)
         
         attn = F.softmax(dots, dim=-1)
         
         # Apply attention to values
-        feats = torch.einsum('bhj,bji->bhi', attn, v.transpose(1, 2))
-        feats = feats.reshape(n_nodes, self.n_heads * self.dim_head)
+        feats = torch.einsum('bhj,bjd->bhd', attn, v)
+        feats = feats.reshape(-1, self.n_heads * self.dim_head)
         feats = self.to_out(feats)  # [n_nodes, output_nf]
         
-        # Coordinate attention - create mask for edges if needed
+        # Coordinate attention
+        edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
+        
+        # Apply mask to coordinate weights if provided
         if mask is not None:
-            # Create edge mask based on node mask
-            edge_mask = mask[row, col].unsqueeze(-1)  # [n_edges, 1]
-            edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
-            edge_weights = edge_weights.masked_fill(~edge_mask, -1e9)
-        else:
-            edge_weights = self.coors_mlp(edge_features)  # [n_edges, 1]
+            # Create a mask for edges based on node mask
+            edge_mask = mask[row] & mask[col]  # [n_edges]
+            edge_weights = edge_weights.masked_fill(~edge_mask.unsqueeze(-1), -1e9)
         
         coord_weights = F.softmax(edge_weights, dim=0)
         
