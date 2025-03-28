@@ -17,7 +17,7 @@ dependencies:
   - pandas=2.0.3
   - tqdm=4.66.1
   - pip:
-    - atom3d==0.2.7
+    - atom3d==0.2.6
     - torch-scatter==2.1.2
     - torch-sparse==0.6.18
     - torch-cluster==1.6.3
