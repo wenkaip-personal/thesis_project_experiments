@@ -39,10 +39,16 @@ class ResEnTransformer(nn.Module):
         # Embed atom types to convert from Long to Float tensor with proper dimensions
         h = self.embed(h)
         
-        # Apply En Transformer to get node embeddings for all atoms
-        h, x = self.transformer(h, x, edges, mask=None)
+        # Create an edge mask: True if nodes are in the same graph, False otherwise
+        # This ensures attention only happens within each protein graph
+        edge_src, edge_dst = edges
+        edge_mask = batch.batch[edge_src] == batch.batch[edge_dst]
+        
+        # Apply En Transformer with edge mask
+        h, x = self.transformer(h, x, edges, mask=edge_mask)
 
         # Get class logits
         out = self.mlp(h)
         
+        # Extract embeddings for the alpha carbon atoms
         return out[batch.ca_idx + batch.ptr[:-1]]

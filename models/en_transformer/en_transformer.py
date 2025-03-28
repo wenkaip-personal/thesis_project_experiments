@@ -75,7 +75,7 @@ class EnAttention(nn.Module):
         h: Node features [n_nodes, input_nf]
         x: Node coordinates [n_nodes, 3]
         edge_index: Graph connectivity [2, n_edges]
-        mask: Optional mask tensor
+        mask: Optional mask tensor [n_edges] - True for valid edges, False for invalid ones
         """
         row, col = edge_index
         n_nodes = h.shape[0]
@@ -103,6 +103,16 @@ class EnAttention(nn.Module):
         # Dot product attention score (equation 8)
         attn_score = torch.sum(q_i * k_j, dim=-1) / (self.dim_head**0.5)  # [n_edges, n_heads]
         attn_score = attn_score + pos_encoding + edge_weights  # Add positional and edge information
+        
+        # Apply mask to attention scores if provided
+        if mask is not None:
+            # Set attention scores to a very negative value for edges connecting nodes from different graphs
+            # This ensures they get zero weight after softmax
+            attn_score = torch.where(
+                mask.unsqueeze(-1),  # Expand mask to [n_edges, n_heads]
+                attn_score,
+                torch.tensor(-1e9, device=attn_score.device)
+            )
         
         # Apply softmax per source node and head (equation 9)
         attn_score_max, _ = torch_scatter.scatter_max(attn_score, row, dim=0)
@@ -218,7 +228,7 @@ class EnTransformer(nn.Module):
         # Transformer layers
         self.layers = nn.ModuleList([
             EnTransformerLayer(
-                input_nf if i == 0 else hidden_nf,
+                hidden_nf,
                 hidden_nf,
                 hidden_nf,
                 n_heads,
@@ -243,7 +253,7 @@ class EnTransformer(nn.Module):
         h: Input node features [n_nodes, input_nf]
         x: Input coordinates [n_nodes, 3] 
         edge_index: Graph connectivity [2, n_edges]
-        mask: Optional mask tensor
+        mask: Optional mask tensor for edges [n_edges]
         """
         # Initial embedding
         h = self.input_embedding(h)
