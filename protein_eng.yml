@@ -1,0 +1,31 @@
+name: protein_eng
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9  # Using Python 3.9 for better compatibility with all packages
+  - pip=23.0.1
+  - pytorch-cuda=12.1  # Matching CUDA version from notebook
+  - pytorch=2.3.0      # Matching PyTorch version from notebook
+  - torchvision=0.18.0
+  - torchaudio=2.3.0
+  - numpy=1.24.3
+  - scipy=1.11.3
+  - matplotlib=3.7.2
+  - pandas=2.0.3
+  - tqdm=4.66.1
+  - pip:
+    - atom3d==0.2.7
+    - torch-scatter==2.1.2
+    - torch-sparse==0.6.18
+    - torch-cluster==1.6.3
+    - torch-spline-conv==1.2.2
+    - torch-geometric==2.4.0
+    - einops==0.7.0
+    - einx==0.6.0
+    - tensorboard==2.14.1
+    - jupyterlab==4.0.8
+    - ipywidgets==8.1.1
+    - notebook==7.0.6
