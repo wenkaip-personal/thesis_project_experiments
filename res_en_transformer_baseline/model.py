@@ -14,11 +14,11 @@ class ResEnTransformer(nn.Module):
         super().__init__()
         
         # Add embedding layer to convert atom indices to feature vectors
-        self.embed = nn.Embedding(input_nf, hidden_nf)
+        self.embed = nn.Embedding(input_nf, input_nf)
         
         # Main En Transformer network - now expecting hidden_nf as input dimension
         self.transformer = EnTransformer(
-            input_nf=hidden_nf,
+            input_nf=input_nf,
             output_nf=hidden_nf,
             hidden_nf=hidden_nf,
             n_layers=n_layers,
