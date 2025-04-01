@@ -13,7 +13,6 @@ dependencies:
     - torch==2.3.0 --index-url https://download.pytorch.org/whl/cu121
     - atom3d
     - torch-geometric==2.5.3
-    - pyg-lib -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
     - torch-scatter -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
     - torch-sparse -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
     - torch-cluster -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
