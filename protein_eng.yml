@@ -10,7 +10,7 @@ dependencies:
   - pytorch-cuda=12.1  # Matching CUDA version from notebook
   - pytorch=2.3.0      # Matching PyTorch version from notebook
   - pip:
-    - torch==2.3.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    - torch==2.3.0 --index-url https://download.pytorch.org/whl/cu121
     - atom3d
     - torch-geometric==2.5.3
     - pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
