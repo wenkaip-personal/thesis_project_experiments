@@ -23,6 +23,8 @@ parser.add_argument('--data_path', type=str,
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
 parser.add_argument('--split_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/')
+parser.add_argument('--model_path', type=str, 
+                    default='/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_en_egnn_baseline/models/')
 # Add debug mode flag
 parser.add_argument('--debug', action='store_true',
                     help='enable debug mode with reduced dataset size and fewer epochs')
@@ -121,7 +123,7 @@ def train(model, train_dataset, val_dataset):
                                      max_batches=val_batches)
         print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
 
-        path = f'res_en_egnn_baseline/models/RES_{model_id}_{epoch}.pt'
+        path = args.model_path + f'RES_{model_id}_{epoch}.pt'
         torch.save(model.state_dict(), path)
         
         if val_loss < best_val_loss:
