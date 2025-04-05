@@ -150,9 +150,6 @@ def test(model, test_dataset):
 def forward(model, batch, device):
     batch = batch.to(device)
 
-    print(batch.atoms.shape)
-    print(batch.num_nodes)
-    
     # Pass the batch to the model - now the model will handle masking internally
     return model(batch.atoms, batch.x, batch.edge_index, batch)
 
@@ -179,8 +176,6 @@ def main():
     dataloader = partial(torch_geometric.loader.DataLoader, num_workers=args.num_workers, batch_size=args.batch)
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
-
-    print(train_dataset.__len__())
 
     # Initialize model with correct dimensions
     model = ResEnTransformer(
