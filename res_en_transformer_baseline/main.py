@@ -180,6 +180,8 @@ def main():
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 
+    print(len(train_dataset))
+
     # Initialize model with correct dimensions
     model = ResEnTransformer(
         input_nf=9,  # One-hot encoded atoms (9 possible elements)
