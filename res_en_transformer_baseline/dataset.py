@@ -177,3 +177,6 @@ class RESDataset(IterableDataset):
                 graph.label = aa
                 graph.ca_idx = int(ca_idx)
                 yield graph
+
+    def __len__(self):
+        return len(self.dataset)
