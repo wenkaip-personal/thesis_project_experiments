@@ -149,6 +149,9 @@ def test(model, test_dataset):
 
 def forward(model, batch, device):
     batch = batch.to(device)
+
+    print(batch.atoms.shape)
+    print(batch.num_nodes)
     
     # Pass the batch to the model - now the model will handle masking internally
     return model(batch.atoms, batch.x, batch.edge_index, batch)
