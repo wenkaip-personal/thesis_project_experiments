@@ -65,6 +65,7 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
     loss_fn = nn.CrossEntropyLoss()
     t = tqdm.tqdm(dataset)
+    print(len(dataset))
     metrics = get_metrics()
     total_loss, total_count = 0, 0
     targets, predicts = [], []
