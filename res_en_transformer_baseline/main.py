@@ -1,4 +1,5 @@
 import argparse
+import wandb
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
@@ -48,6 +49,18 @@ print = partial(print, flush=True)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_id = float(time.time())
 
+# Start a new wandb run to track this script.
+run = wandb.init(
+    # Set the wandb project where this run will be logged.
+    project="res-en-transformer",
+    # Track hyperparameters and run metadata.
+    config={
+        "learning_rate": args.lr,
+        "architecture": "ResEnTransformer",
+        "dataset": "RES",
+        "epochs": args.epochs,
+    },
+)
 def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
     loss_fn = nn.CrossEntropyLoss()
@@ -134,6 +147,14 @@ def train(model, train_dataset, val_dataset):
             best_path = path
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
 
+        # Log metrics to wandb.
+        run.log({
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+        })
+
 def test(model, test_dataset):
     model.load_state_dict(torch.load(args.test))
     model.eval()
@@ -146,6 +167,12 @@ def test(model, test_dataset):
     
     print(f"Test accuracy: {test_acc:.2f}%")
     print(f"Test loss: {test_loss:.8f}")
+
+    # Log metrics to wandb.
+    run.log({
+        "test_loss": test_loss,
+        "test_acc": test_acc,
+    })
 
 def forward(model, batch, device):
     batch = batch.to(device)
@@ -194,3 +221,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Finish the run and upload any remaining data.
+    run.finish()
