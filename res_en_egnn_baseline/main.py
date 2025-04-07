@@ -114,6 +114,11 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         batch_count += 1        
         t.set_description(f"{total_loss/total_count:.8f}")
         
+        # Log metrics to wandb.
+        run.log({
+            "loss": total_loss / total_count
+        })
+        
     accuracy = metrics['accuracy'](targets, predicts)
     return total_loss / total_count, accuracy
 
@@ -150,7 +155,7 @@ def train(model, train_dataset, val_dataset):
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,
-            "val_acc": val_acc,
+            "val_acc": val_acc
         })
 
 def test(model, test_dataset):
@@ -169,7 +174,7 @@ def test(model, test_dataset):
     # Log metrics to wandb.
     run.log({
         "test_loss": test_loss,
-        "test_acc": test_acc,
+        "test_acc": test_acc
     })
 
 def forward(model, batch, device):
