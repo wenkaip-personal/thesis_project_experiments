@@ -118,7 +118,8 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
 
         # Log metrics to wandb.
         run.log({
-            "loss": total_loss / total_count
+            "loss": total_loss / total_count,
+            "accuracy": metrics['accuracy'](targets, predicts)
         })
         
     accuracy = metrics['accuracy'](targets, predicts)
