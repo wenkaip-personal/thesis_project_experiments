@@ -157,7 +157,7 @@ def train(model, train_dataset, val_dataset):
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,
-            "val_acc": val_acc,
+            "val_acc": val_acc
         })
 
 def test(model, test_dataset):
@@ -176,7 +176,7 @@ def test(model, test_dataset):
     # Log metrics to wandb.
     run.log({
         "test_loss": test_loss,
-        "test_acc": test_acc,
+        "test_acc": test_acc
     })
 
 def forward(model, batch, device):
