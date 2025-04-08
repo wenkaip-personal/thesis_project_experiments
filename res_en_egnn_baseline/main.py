@@ -75,6 +75,9 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         
         if max_time and (time.time() - start) > 60*max_time: 
             break
+        
+        # Start timing this batch
+        batch_start_time = time.time()
             
         if optimizer:
             optimizer.zero_grad()
@@ -110,6 +113,10 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                 torch.cuda.empty_cache()
                 print('Skipped batch due to OOM')
                 continue
+            
+        # Calculate and print the time taken for this batch
+        batch_time = time.time() - batch_start_time
+        print(f"Batch {batch_count} processing time: {batch_time:.4f} seconds")
         
         batch_count += 1        
         t.set_description(f"{total_loss/total_count:.8f}")
@@ -117,7 +124,8 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         # Log metrics to wandb.
         run.log({
             "loss": total_loss / total_count,
-            "accuracy": metrics['accuracy'](targets, predicts)
+            "accuracy": metrics['accuracy'](targets, predicts),
+            "batch_time": batch_time
         })
         
     accuracy = metrics['accuracy'](targets, predicts)
