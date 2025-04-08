@@ -49,7 +49,7 @@ model_id = float(time.time())
 # Start a new wandb run to track this script.
 run = wandb.init(
     # Set the wandb project where this run will be logged.
-    project="res-en-egnn",
+    project="res",
     # Track hyperparameters and run metadata.
     config={
         "learning_rate": args.lr,
