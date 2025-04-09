@@ -4,7 +4,7 @@ import wandb
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
                     help='number of threads for loading data')
-parser.add_argument('--batch', metavar='SIZE', type=int, default=8,
+parser.add_argument('--batch', metavar='SIZE', type=int, default=32,
                     help='batch size')
 parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
