@@ -4,7 +4,7 @@ import wandb
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
                     help='number of threads for loading data')
-parser.add_argument('--batch', metavar='SIZE', type=int, default=32,
+parser.add_argument('--batch', metavar='SIZE', type=int, default=8,
                     help='batch size')
 parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
@@ -91,7 +91,7 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             if "CUDA out of memory" not in str(e): 
                 raise(e)
             torch.cuda.empty_cache()
-            print('Skipped batch due to OOM')
+            print('Skipped batch due to OOM', flush=True)
             continue
         
         # Use batch.label directly - it's already a batched tensor
@@ -114,12 +114,12 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                 if "CUDA out of memory" not in str(e):
                     raise(e)
                 torch.cuda.empty_cache()
-                print('Skipped batch due to OOM')
+                print('Skipped batch due to OOM', flush=True)
                 continue
             
         # Calculate and print the time taken for this batch
         batch_time = time.time() - batch_start_time
-        print(f"Batch {batch_count} processing time: {batch_time:.4f} seconds")
+        print(f"Batch {total_count} processing time: {batch_time:.4f} seconds")
         
         batch_count += 1
         t.set_description(f"{total_loss/total_count:.8f}")
@@ -146,6 +146,8 @@ def train(model, train_dataset, val_dataset):
         model.train()
         train_loss, train_acc = loop(train_dataset, model, optimizer=optimizer, 
                                      max_time=args.train_time, max_batches=train_batches)
+        path = args.model_path + f'RES_{model_id}_{epoch}.pt'
+        torch.save(model.state_dict(), path)
         print(f'\nEPOCH {epoch} TRAIN loss: {train_loss:.8f} acc: {train_acc:.2f}%')
 
         model.eval()
@@ -153,9 +155,6 @@ def train(model, train_dataset, val_dataset):
             val_loss, val_acc = loop(val_dataset, model, max_time=args.val_time, 
                                      max_batches=val_batches)
         print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
-
-        path = args.model_path + f'RES_{model_id}_{epoch}.pt'
-        torch.save(model.state_dict(), path)
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -179,9 +178,8 @@ def test(model, test_dataset):
     
     with torch.no_grad():
         test_loss, test_acc = loop(test_dataset, model, max_batches=test_batches)
-    
-    print(f"Test accuracy: {test_acc:.2f}%")
-    print(f"Test loss: {test_loss:.8f}")
+        
+    print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
 
     # Log metrics to wandb.
     run.log({
