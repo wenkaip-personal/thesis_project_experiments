@@ -130,8 +130,8 @@ class OrientedMessagePassing(MessagePassing):
         row, col = edge_index
         orientations_i = orientations[row]  # Shape: [num_edges, 3, 3]
         
-        # Propagate messages with pre-lifted orientations
-        return self.propagate(edge_index, h=h, x=x, orientations_i=orientations_i, edge_attr=edge_attr)
+        # Propagate messages with both original and pre-lifted orientations
+        return self.propagate(edge_index, h=h, x=x, orientations=orientations, orientations_i=orientations_i, edge_attr=edge_attr)
     
     def message(self, h_i, h_j, x_i, x_j, orientations_i, edge_attr):
         # Calculate relative position
