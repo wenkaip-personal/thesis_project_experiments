@@ -126,8 +126,12 @@ class OrientedMessagePassing(MessagePassing):
         )
     
     def forward(self, h, x, edge_index, orientations, edge_attr):
-        # Propagate messages
-        return self.propagate(edge_index, h=h, x=x, orientations=orientations, edge_attr=edge_attr)
+        # Manually lift orientations to edges
+        row, col = edge_index
+        orientations_i = orientations[row]  # Shape: [num_edges, 3, 3]
+        
+        # Propagate messages with pre-lifted orientations
+        return self.propagate(edge_index, h=h, x=x, orientations_i=orientations_i, edge_attr=edge_attr)
     
     def message(self, h_i, h_j, x_i, x_j, orientations_i, edge_attr):
         # Calculate relative position
@@ -136,7 +140,6 @@ class OrientedMessagePassing(MessagePassing):
         # Project relative position using orientation of node i
         # orientations_i shape: [num_edges, 3, 3]
         # rel_pos shape: [num_edges, 3]
-        # We need batched matrix-vector multiplication
         projected_rel_pos = torch.bmm(orientations_i.transpose(1, 2), rel_pos.unsqueeze(-1)).squeeze(-1)
         
         # Construct message features
