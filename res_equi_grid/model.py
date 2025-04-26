@@ -102,7 +102,7 @@ class OrientationLearner(nn.Module):
         vec3 = torch.cross(vec1_norm, vec2_norm, dim=-1)
         
         # Stack vectors to create orientation matrices
-        orientations = torch.stack([vec1_norm, vec2_norm, vec3], dim=1)
+        orientations = torch.stack([vec1_norm, vec2_norm, vec3], dim=-1)
         
         return orientations
     
