@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
 from torch_scatter import scatter_mean, scatter_max
 
-class OrientedMP(nn.Module):
+class ResOrientedMP(nn.Module):
     def __init__(self, in_node_nf=9, hidden_nf=128, out_node_nf=20, in_edge_nf=16, n_layers=4):
         super().__init__()
         self.in_node_nf = in_node_nf
@@ -102,7 +102,7 @@ class OrientationLearner(nn.Module):
         vec3 = torch.cross(vec1_norm, vec2_norm, dim=-1)
         
         # Stack vectors to create orientation matrices
-        orientations = torch.stack([vec1_norm, vec2_norm, vec3], dim=-1)
+        orientations = torch.stack([vec1_norm, vec2_norm, vec3], dim=1)
         
         return orientations
     

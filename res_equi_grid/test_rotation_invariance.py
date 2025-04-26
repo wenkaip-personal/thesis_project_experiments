@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from torch_geometric.loader import DataLoader
 from dataset import RESDataset
-from model import OrientedMP
+from model import ResOrientedMP
 
 def random_rotation_matrix():
     """Generate a random 3D rotation matrix"""
@@ -87,7 +87,7 @@ def get_node_features(self, h, x, edge_index, batch):
     return h[batch.ca_idx + batch.ptr[:-1]]
 
 # Add the method to the model class
-OrientedMP.get_node_features = get_node_features
+ResOrientedMP.get_node_features = get_node_features
 
 def main():
     # Configuration
@@ -101,7 +101,7 @@ def main():
     sample = next(iter(loader))
     
     # Initialize model (or load pre-trained model)
-    model = OrientedMP(
+    model = ResOrientedMP(
         in_node_nf=9,      # One-hot encoded atoms
         hidden_nf=128,     # Hidden dimension
         out_node_nf=20,    # Number of amino acid classes
