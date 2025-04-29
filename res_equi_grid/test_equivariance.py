@@ -32,7 +32,7 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
         Average equivariance error
     """
     # Initialize data loader
-    loader = DataLoader(dataset, batch_size=1, shuffle=True)
+    loader = DataLoader(dataset, batch_size=1)
     
     # Initialize error metrics
     feature_errors = []
