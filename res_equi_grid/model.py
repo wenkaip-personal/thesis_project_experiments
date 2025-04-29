@@ -169,25 +169,26 @@ class OrientedMessagePassing(MessagePassing):
         )
     
     def forward(self, h, x, edge_index, orientations, edge_attr):
-        # Propagate messages
-        return self.propagate(
-            edge_index, 
-            h=h, 
-            x=x,
-            orientations=orientations,
-            edge_attr=edge_attr
-        )
-    
-    def message(self, h_i, h_j, x_i, x_j, orientations_i, edge_attr):
-        # Get relative positions
-        rel_pos = x_j - x_i
+        # Pre-compute projected relative positions to avoid shape issues
+        row, col = edge_index
+        rel_pos = x[col] - x[row]
         
-        # Project relative positions to local coordinate frame
+        # Project relative positions to local coordinate frames using orientations
+        orientations_i = orientations[row]
         projected_rel_pos = torch.bmm(
             orientations_i.transpose(1, 2), 
             rel_pos.unsqueeze(-1)
         ).squeeze(-1)
         
+        # Propagate messages with the projected positions
+        return self.propagate(
+            edge_index, 
+            h=h, 
+            projected_rel_pos=projected_rel_pos,
+            edge_attr=edge_attr
+        )
+    
+    def message(self, h_i, h_j, projected_rel_pos, edge_attr):
         # Combine features for message
         message_input = torch.cat([h_i, h_j, edge_attr, projected_rel_pos], dim=-1)
         
