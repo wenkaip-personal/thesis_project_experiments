@@ -148,8 +148,8 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
                 orientation_errors.append(orientation_error)
                 
                 # Print feature differences
-                print(f"Node feature difference (first node, first 5 values):")
-                print(original_node_features[0, :5] - rotated_node_features[0, :5])
+                print(f"Node feature difference (first node):")
+                print(original_node_features[0] - rotated_node_features[0])
                 
                 print(f"Output error = {output_error:.6f}")
                 print(f"Node feature error = {node_feature_error:.6f}")
