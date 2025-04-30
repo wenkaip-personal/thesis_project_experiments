@@ -190,7 +190,7 @@ def main():
     
     # Measure equivariance error
     output_error, node_feature_error, orientation_error = measure_equivariance_error(
-        model, dataset, device, num_samples=1, num_rotations=100)
+        model, dataset, device, num_samples=100, num_rotations=100)
     
     print(f"Equivariance test completed.")
     print(f"Output error: {output_error:.6f}")
