@@ -6,6 +6,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import global_mean_pool
 from dataset import RESDataset
 from model import EquivariantResModel
+import torch.nn.functional as F
 
 def random_rotation_matrix():
     """Generate a random 3D rotation matrix"""
@@ -134,17 +135,17 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
                 print(f"Rotated model output (first 5 classes):")
                 print(rotated_output[0, :5])
                 
-                # Calculate errors
-                output_error = torch.norm(original_output - rotated_output).item()
+                # Calculate errors using MSE instead of norm
+                output_error = F.mse_loss(original_output, rotated_output).item()
                 output_errors.append(output_error)
                 
                 # Node feature error
-                node_feature_error = torch.norm(original_node_features - rotated_node_features).item()
+                node_feature_error = F.mse_loss(original_node_features, rotated_node_features).item()
                 node_feature_errors.append(node_feature_error)
                 
                 # Orientation error
                 expected_orientation = torch.matmul(rotation_tensor, original_orientations[0])
-                orientation_error = torch.norm(expected_orientation - rotated_orientations[0]).item()
+                orientation_error = F.mse_loss(expected_orientation, rotated_orientations[0]).item()
                 orientation_errors.append(orientation_error)
                 
                 # Print feature differences
