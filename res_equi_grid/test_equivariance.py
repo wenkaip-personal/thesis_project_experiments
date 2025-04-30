@@ -30,13 +30,15 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
         num_rotations: Number of random rotations to test per sample
         
     Returns:
-        Average equivariance error
+        Average equivariance errors
     """
     # Initialize data loader
     loader = DataLoader(dataset, batch_size=1)
     
     # Initialize error metrics
     output_errors = []
+    orientation_errors = []
+    node_feature_errors = []
     
     # Test equivariance on multiple samples
     model.eval()
@@ -48,22 +50,37 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
             # Move sample to device
             sample = sample.to(device)
             
+            # Generate initial atom embeddings
+            initial_embeddings = model.atom_embedding(sample.atoms)
+            
+            # Get original node features after message passing
+            original_x_centered = sample.x
+            if hasattr(sample, 'batch'):
+                batch_idx = sample.batch
+                original_x_centered = sample.x - global_mean_pool(sample.x, batch_idx)[batch_idx]
+                
+            original_orientations = model.get_orientations(initial_embeddings, original_x_centered, 
+                                                         sample.edge_index, sample.edge_s)
+            
+            # Process through message passing to get node features
+            original_node_features = model.message_passing(initial_embeddings, sample.x, 
+                                                         sample.edge_index, original_orientations, 
+                                                         sample.edge_s)
+            
             # Get original output
-            original_output = model(sample.atoms, sample.x, sample.edge_index, sample)
+            original_output = model.output_mlp(original_node_features[sample.ca_idx] 
+                                            if hasattr(sample, 'ca_idx') else original_node_features)
             
             # Print original feature values
             print(f"\n=== Sample {i+1} ===")
             print(f"Original coordinates (first 3 nodes):")
             print(sample.x[:3])
             
-            # Extract and print learned orientations for the original input
-            h = model.atom_embedding(sample.atoms)
-            if hasattr(sample, 'batch'):
-                batch_idx = sample.batch
-                centered_x = sample.x - global_mean_pool(sample.x, batch_idx)[batch_idx]
-            else:
-                centered_x = sample.x
-            original_orientations = model.get_orientations(h, centered_x, sample.edge_index, sample.edge_s)
+            print(f"Original node embeddings (first node, first 5 values):")
+            print(initial_embeddings[0, :5])
+            
+            print(f"Original node features after message passing (first node, first 5 values):")
+            print(original_node_features[0, :5])
             
             print(f"Original learned orientations (first node):")
             print(original_orientations[0])
@@ -89,17 +106,27 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
                 print(f"Rotated coordinates (first 3 nodes):")
                 print(rotated_x[:3])
                 
-                # Get output from rotated input
-                rotated_output = model(sample.atoms, rotated_x, sample.edge_index, sample)
-                
-                # Extract and print learned orientations for the rotated input
-                h = model.atom_embedding(sample.atoms)
+                # Get rotated node features
+                rotated_x_centered = rotated_x
                 if hasattr(sample, 'batch'):
                     batch_idx = sample.batch
-                    centered_x = rotated_x - global_mean_pool(rotated_x, batch_idx)[batch_idx]
-                else:
-                    centered_x = rotated_x
-                rotated_orientations = model.get_orientations(h, centered_x, sample.edge_index, sample.edge_s)
+                    rotated_x_centered = rotated_x - global_mean_pool(rotated_x, batch_idx)[batch_idx]
+                    
+                rotated_orientations = model.get_orientations(initial_embeddings, rotated_x_centered, 
+                                                           sample.edge_index, sample.edge_s)
+                
+                # Process through message passing to get node features
+                rotated_node_features = model.message_passing(initial_embeddings, rotated_x, 
+                                                           sample.edge_index, rotated_orientations, 
+                                                           sample.edge_s)
+                
+                # Get final output
+                rotated_output = model.output_mlp(rotated_node_features[sample.ca_idx] 
+                                               if hasattr(sample, 'ca_idx') else rotated_node_features)
+                
+                # Print rotated feature values
+                print(f"Rotated node features after message passing (first node, first 5 values):")
+                print(rotated_node_features[0, :5])
                 
                 print(f"Rotated learned orientations (first node):")
                 print(rotated_orientations[0])
@@ -107,23 +134,37 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
                 print(f"Rotated model output (first 5 classes):")
                 print(rotated_output[0, :5])
                 
-                # Calculate error
-                error = torch.norm(original_output - rotated_output).item()
-                output_errors.append(error)
+                # Calculate errors
+                output_error = torch.norm(original_output - rotated_output).item()
+                output_errors.append(output_error)
                 
-                print(f"Output error = {error:.6f}")
+                # Node feature error
+                node_feature_error = torch.norm(original_node_features - rotated_node_features).item()
+                node_feature_errors.append(node_feature_error)
                 
-                # Check if orientations transform correctly (should be R * original_orientation)
+                # Orientation error
                 expected_orientation = torch.matmul(rotation_tensor, original_orientations[0])
                 orientation_error = torch.norm(expected_orientation - rotated_orientations[0]).item()
+                orientation_errors.append(orientation_error)
+                
+                # Print feature differences
+                print(f"Node feature difference (first node, first 5 values):")
+                print(original_node_features[0, :5] - rotated_node_features[0, :5])
+                
+                print(f"Output error = {output_error:.6f}")
+                print(f"Node feature error = {node_feature_error:.6f}")
                 print(f"Orientation error = {orientation_error:.6f}")
     
     # Calculate average errors
     avg_output_error = sum(output_errors) / len(output_errors)
+    avg_node_feature_error = sum(node_feature_errors) / len(node_feature_errors)
+    avg_orientation_error = sum(orientation_errors) / len(orientation_errors)
     
     print(f"\nAverage output error: {avg_output_error:.6f}")
+    print(f"Average node feature error: {avg_node_feature_error:.6f}")
+    print(f"Average orientation error: {avg_orientation_error:.6f}")
     
-    return avg_output_error
+    return avg_output_error, avg_node_feature_error, avg_orientation_error
 
 def main():
     # Configuration
@@ -148,9 +189,13 @@ def main():
     # model.load_state_dict(torch.load('path/to/model.pt'))
     
     # Measure equivariance error
-    error = measure_equivariance_error(model, dataset, device)
+    output_error, node_feature_error, orientation_error = measure_equivariance_error(
+        model, dataset, device)
     
-    print(f"Equivariance test completed. Average error: {error:.6f}")
+    print(f"Equivariance test completed.")
+    print(f"Output error: {output_error:.6f}")
+    print(f"Node feature error: {node_feature_error:.6f}")
+    print(f"Orientation error: {orientation_error:.6f}")
 
 if __name__ == "__main__":
     main()
