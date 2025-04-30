@@ -1,208 +1,172 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import MessagePassing
-from torch_scatter import scatter_add, scatter_mean, scatter_max
+from torch_geometric.nn import global_add_pool, global_mean_pool
+from torch_scatter import scatter_add
 
-# Small constant to prevent numerical issues
 EPS = 1e-8
 
-class ResOrientedMP(nn.Module):
-    """
-    Residue Oriented Message Passing model with equivariance properties.
-    """
-    def __init__(self, in_node_nf=9, hidden_nf=128, out_node_nf=20, in_edge_nf=16, n_layers=4):
+class EquivariantResModel(nn.Module):
+    def __init__(self, in_node_nf=9, hidden_nf=128, out_node_nf=20, edge_nf=16, n_layers=4, device='cuda'):
+        """
+        Equivariant model for residue identity prediction.
+        
+        Args:
+            in_node_nf: Input dimension of node features (number of atom types)
+            hidden_nf: Hidden dimension
+            out_node_nf: Output dimension (number of amino acid classes)
+            edge_nf: Edge feature dimension
+            n_layers: Number of message passing layers
+            device: Device to run the model on
+        """
         super().__init__()
-        self.in_node_nf = in_node_nf
         self.hidden_nf = hidden_nf
-        self.out_node_nf = out_node_nf
+        self.device = device
         self.n_layers = n_layers
         
-        # Node feature embedding
+        # Node embedding
         self.atom_embedding = nn.Embedding(in_node_nf, hidden_nf)
         
-        # Orientation learning module
-        self.orientation_network = OrientationLearner(
-            hidden_nf=hidden_nf,
-            edge_nf=in_edge_nf
+        # Orientation network
+        self.orientation_mlp1 = nn.Sequential(
+            nn.Linear(hidden_nf*2 + edge_nf, hidden_nf),
+            nn.SiLU(),
+            nn.Linear(hidden_nf, hidden_nf),
+            nn.SiLU(),
+            nn.Linear(hidden_nf, 1)
+        )
+        
+        self.orientation_mlp2 = nn.Sequential(
+            nn.Linear(hidden_nf*2 + edge_nf, hidden_nf),
+            nn.SiLU(),
+            nn.Linear(hidden_nf, hidden_nf),
+            nn.SiLU(),
+            nn.Linear(hidden_nf, 1)
         )
         
         # Message passing layers
-        self.mp_layers = nn.ModuleList([
-            OrientedMessagePassing(
-                hidden_nf=hidden_nf,
-                edge_nf=in_edge_nf
-            ) for _ in range(n_layers)
-        ])
+        self.message_layers = nn.ModuleList()
+        for i in range(n_layers):
+            self.message_layers.append(nn.Sequential(
+                nn.Linear(hidden_nf*2 + edge_nf + 3, hidden_nf),
+                nn.SiLU(),
+                nn.Linear(hidden_nf, hidden_nf)
+            ))
+            
+        self.update_layers = nn.ModuleList()
+        for i in range(n_layers):
+            self.update_layers.append(nn.Sequential(
+                nn.Linear(hidden_nf*2, hidden_nf),
+                nn.SiLU(),
+                nn.Linear(hidden_nf, hidden_nf)
+            ))
         
-        # Final prediction MLP
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_nf, 2*hidden_nf),
+        # Output MLP
+        self.output_mlp = nn.Sequential(
+            nn.Linear(hidden_nf, hidden_nf*2),
             nn.SiLU(),
-            nn.Dropout(p=0.1),
-            nn.Linear(2*hidden_nf, out_node_nf)
-        )
-    
-    def forward(self, h, x, edge_index, batch):
-        # Embed node features
-        h = self.atom_embedding(h)
-        
-        # Add small noise to coordinates for better stability
-        x = x + torch.randn_like(x) * 0.01
-        
-        # Center coordinates per graph to achieve translation invariance
-        if hasattr(batch, 'batch'):
-            batch_idx = batch.batch
-            x = x - scatter_mean(x, batch_idx, dim=0)[batch_idx]
-        
-        # Learn orientations for each atom
-        orientations = self.orientation_network(h, x, edge_index, batch.edge_s)
-        
-        # Message passing with learned orientations
-        for mp_layer in self.mp_layers:
-            h = mp_layer(h, x, edge_index, orientations, batch.edge_s)
-        
-        # Get prediction for the central atom (CA)
-        if hasattr(batch, 'ca_idx') and hasattr(batch, 'ptr'):
-            return self.mlp(h[batch.ca_idx + batch.ptr[:-1]])
-        else:
-            return self.mlp(h)
-
-
-class OrientationLearner(nn.Module):
-    """
-    Orientation learning module.
-    """
-    def __init__(self, hidden_nf, edge_nf):
-        super().__init__()
-        self.hidden_nf = hidden_nf
-        
-        # MLP for processing edge features
-        self.edge_mlp = nn.Sequential(
-            nn.Linear(edge_nf + hidden_nf*2, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, hidden_nf),
-            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_nf*2, out_node_nf)
         )
         
-        # MLPs for generating two vector components for orientation
-        self.vec1_net = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, 1)
-        )
-        
-        self.vec2_net = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, 1)
-        )
-    
-    def forward(self, h, x, edge_index, edge_attr):
+    def get_orientations(self, h, x, edge_index, edge_attr):
+        """Learn orientations for each node"""
         row, col = edge_index
         
-        # Get relative positions
-        rel_pos = x[col] - x[row]
-        
-        # Create edge features
+        # Create message input features
         edge_features = torch.cat([h[row], h[col], edge_attr], dim=-1)
-        edge_features = self.edge_mlp(edge_features)
         
-        # Weight the relative positions to create basis vectors
-        vec1_weights = self.vec1_net(edge_features)
-        vec2_weights = self.vec2_net(edge_features)
+        # Get weighted vectors from relative positions
+        rel_pos = x[row] - x[col]
+        
+        # Weight the relative positions to form basis vectors
+        vec1_weights = self.orientation_mlp1(edge_features)
+        vec2_weights = self.orientation_mlp2(edge_features)
         
         vec1 = rel_pos * vec1_weights
         vec2 = rel_pos * vec2_weights
         
-        # Aggregate weighted vectors to nodes
-        vec1_per_node = scatter_add(vec1, row, dim=0, dim_size=h.size(0))
-        vec2_per_node = scatter_add(vec2, row, dim=0, dim_size=h.size(0))
+        # Aggregate to get per-node vectors
+        vec1_per_node = scatter_add(vec1, col, dim=0, dim_size=h.size(0))
+        vec2_per_node = scatter_add(vec2, col, dim=0, dim_size=h.size(0))
         
-        # Apply Gram-Schmidt process to create orthogonal basis
-        return self.gram_schmidt(vec1_per_node, vec2_per_node)
+        # Gram-Schmidt orthogonalization to create orientations
+        return self.gram_schmidt_batch(vec1_per_node, vec2_per_node)
     
-    def gram_schmidt(self, v1, v2):
-        """
-        Apply Gram-Schmidt process to create orthogonal basis vectors
-        """
+    def gram_schmidt_batch(self, v1, v2):
+        """Apply Gram-Schmidt to create orthogonal basis"""
         # Normalize first vector
-        e1 = F.normalize(v1, p=2, dim=-1)
+        v1_norm = torch.norm(v1, dim=-1, keepdim=True) + EPS
+        e1 = v1 / v1_norm
         
         # Make second vector orthogonal to first
-        v2_proj = v2 - torch.sum(e1 * v2, dim=-1, keepdim=True) * e1
-        e2 = F.normalize(v2_proj, p=2, dim=-1)
+        proj = torch.sum(e1 * v2, dim=-1, keepdim=True) * e1
+        v2_orthogonal = v2 - proj
+        
+        # Normalize second vector
+        v2_norm = torch.norm(v2_orthogonal, dim=-1, keepdim=True) + EPS
+        e2 = v2_orthogonal / v2_norm
         
         # Create third vector using cross product for right-handed system
-        e3 = torch.cross(e1, e2, dim=-1)
+        e3 = torch.cross(e1, e2)
         
         # Stack to create orientation matrices [batch_size, 3, 3]
         return torch.stack([e1, e2, e3], dim=-1)
-
-
-class OrientedMessagePassing(MessagePassing):
-    """
-    Message passing with orientations.
-    """
-    def __init__(self, hidden_nf, edge_nf):
-        super().__init__(aggr='add')  # Use 'add' aggregation
-        self.hidden_nf = hidden_nf
-        
-        # MLP for processing messages with distance encoding
-        self.message_mlp = nn.Sequential(
-            nn.Linear(hidden_nf*2 + edge_nf + 3, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, hidden_nf)
-        )
-        
-        # Attention mechanism for weighting messages
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_nf, 1),
-            nn.Sigmoid()
-        )
-        
-        # MLP for updating node features
-        self.update_mlp = nn.Sequential(
-            nn.Linear(hidden_nf*2, hidden_nf),
-            nn.SiLU(),
-            nn.Linear(hidden_nf, hidden_nf)
-        )
     
-    def forward(self, h, x, edge_index, orientations, edge_attr):
-        # Pre-compute projected relative positions to avoid shape issues
+    def message_passing(self, h, x, edge_index, orientations, edge_attr):
+        """Message passing with learned orientations"""
         row, col = edge_index
-        rel_pos = x[col] - x[row]
         
-        # Project relative positions to local coordinate frames using orientations
-        orientations_i = orientations[row]
-        projected_rel_pos = torch.bmm(
-            orientations_i.transpose(1, 2), 
-            rel_pos.unsqueeze(-1)
-        ).squeeze(-1)
-        
-        # Propagate messages with the projected positions
-        return self.propagate(
-            edge_index, 
-            h=h, 
-            projected_rel_pos=projected_rel_pos,
-            edge_attr=edge_attr
-        )
+        for i in range(self.n_layers):
+            # Create messages with projected coordinates
+            rel_pos = x[col] - x[row]
+            
+            # Project relative positions to local frame
+            orientations_row = orientations[row]
+            projected_pos = torch.bmm(
+                orientations_row.transpose(1, 2), 
+                rel_pos.unsqueeze(-1)
+            ).squeeze(-1)
+            
+            # Compose messages
+            message_input = torch.cat([h[row], h[col], edge_attr, projected_pos], dim=-1)
+            messages = self.message_layers[i](message_input)
+            
+            # Aggregate messages
+            aggregated = scatter_add(messages, row, dim=0, dim_size=h.size(0))
+            
+            # Update node features
+            update_input = torch.cat([h, aggregated], dim=-1)
+            h = h + self.update_layers[i](update_input)
+            
+        return h
     
-    def message(self, h_i, h_j, projected_rel_pos, edge_attr):
-        # Combine features for message
-        message_input = torch.cat([h_i, h_j, edge_attr, projected_rel_pos], dim=-1)
+    def forward(self, atoms, x, edge_index, data):
+        """Forward pass"""
+        # Embed atom features
+        h = self.atom_embedding(atoms)
         
-        # Process message
-        message = self.message_mlp(message_input)
+        # Center point cloud (translation invariance)
+        if hasattr(data, 'batch'):
+            batch_idx = data.batch
+            x = x - global_mean_pool(x, batch_idx)[batch_idx]
         
-        # Apply attention mechanism
-        message = message * self.attention(message)
+        # Learn orientations
+        orientations = self.get_orientations(h, x, edge_index, data.edge_s)
         
-        return message
-    
-    def update(self, aggr_out, h):
-        # Combine aggregated messages with node features
-        combined = torch.cat([h, aggr_out], dim=-1)
+        # Message passing
+        h = self.message_passing(h, x, edge_index, orientations, data.edge_s)
         
-        # Update node features with residual connection
-        return h + self.update_mlp(combined)
+        # Get prediction for the central alpha carbon
+        if hasattr(data, 'ca_idx') and hasattr(data, 'batch'):
+            if hasattr(data, 'ptr'):
+                # For batched data with pointer
+                output = self.output_mlp(h[data.ca_idx + data.ptr[:-1]])
+            else:
+                # For single graphs
+                output = self.output_mlp(h[data.ca_idx])
+        else:
+            # Fallback to all nodes
+            output = self.output_mlp(h)
+            
+        return output

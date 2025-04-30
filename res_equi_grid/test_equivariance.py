@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from torch_geometric.loader import DataLoader
 from dataset import RESDataset
-from model import ResOrientedMP
+from model import EquivariantResModel
 
 def random_rotation_matrix():
     """Generate a random 3D rotation matrix"""
@@ -35,7 +35,6 @@ def measure_equivariance_error(model, dataset, device, num_samples=10, num_rotat
     loader = DataLoader(dataset, batch_size=1)
     
     # Initialize error metrics
-    feature_errors = []
     output_errors = []
     
     # Test equivariance on multiple samples
@@ -86,16 +85,17 @@ def main():
     dataset = RESDataset(data_path, split_path)
     
     # Initialize model
-    model = ResOrientedMP(
-        in_node_nf=9,      # One-hot encoded atoms
+    model = EquivariantResModel(
+        in_node_nf=9,      # Number of atom types
         hidden_nf=128,     # Hidden dimension
         out_node_nf=20,    # Number of amino acid classes
-        in_edge_nf=16,     # RBF edge features
-        n_layers=4         # Number of message passing layers
+        edge_nf=16,        # Edge feature dimension
+        n_layers=4,        # Number of message passing layers
+        device=device
     ).to(device)
     
     # Optional: Load pre-trained weights if available
-    # model.load_state_dict(torch.load('/path/to/model.pt'))
+    # model.load_state_dict(torch.load('path/to/model.pt'))
     
     # Measure equivariance error
     error = measure_equivariance_error(model, dataset, device)
