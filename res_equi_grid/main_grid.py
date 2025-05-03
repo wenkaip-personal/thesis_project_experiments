@@ -57,15 +57,14 @@ os.makedirs(args.model_path, exist_ok=True)
 
 # Start a new wandb run to track this script
 run = wandb.init(
-    project="res_equi_grid",
+    project="res",
     config={
         "learning_rate": args.lr,
-        "architecture": "EquivariantGridModel",
+        "architecture": "ResEquiGrid",
         "dataset": "RES",
         "epochs": args.epochs,
         "grid_size": args.grid_size,
         "spacing": args.spacing,
-        "hidden_features": args.hidden_nf,
     },
 )
 
@@ -186,7 +185,6 @@ def train(model, train_dataset, val_dataset):
 
         # Log metrics to wandb
         run.log({
-            "epoch": epoch,
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,

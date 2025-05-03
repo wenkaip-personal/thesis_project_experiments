@@ -59,7 +59,7 @@ class EquivariantLayer(nn.Module):
         n3 = torch.cross(n1, n2, dim=-1)
         
         # Stack to create orientation matrices [N, 3, 3]
-        return torch.stack([n1, n2, n3], dim=-2)
+        return torch.stack([n1, n2, n3], dim=-1)
     
     def omega(self, dist):
         """Smoothing function for distance weighting"""
@@ -88,7 +88,7 @@ class EquivariantLayer(nn.Module):
 
 class GridificationLayer(nn.Module):
     """
-    Layer for mapping point cloud to grid
+    Layer for mapping point cloud to grid with orientation-aware projection
     """
     def __init__(self, node_features, hidden_features):
         super().__init__()
@@ -116,37 +116,46 @@ class GridificationLayer(nn.Module):
             nn.Linear(hidden_features, hidden_features)
         )
         
-    def forward(self, node_features, node_pos, grid_pos, edge_index):
+    def forward(self, node_features, node_pos, grid_pos, edge_index, orientations):
         """
-        Map point cloud to grid
+        Map point cloud to grid using orientations for projection
         
         Args:
             node_features: Point cloud features [N, F]
             node_pos: Point cloud positions [N, 3]
             grid_pos: Grid positions [G, 3]
             edge_index: Edge indices between point cloud and grid [2, E]
+            orientations: Orientation matrices for each point [N, 3, 3]
         """
         # Process node features
         node_features = self.node_model(node_features)
         
-        # Generate messages
-        messages = self.message(node_features, node_pos, grid_pos, edge_index)
+        # Generate messages using orientation-aware projection
+        messages = self.message(node_features, node_pos, grid_pos, edge_index, orientations)
         
         # Update grid features
         grid_features = self.update(messages, edge_index[1], grid_pos.size(0))
         
         return grid_features
         
-    def message(self, node_features, node_pos, grid_pos, edge_index):
-        """Generate messages between point cloud and grid"""
+    def message(self, node_features, node_pos, grid_pos, edge_index, orientations):
+        """Generate messages between point cloud and grid with orientation-aware projection"""
         source, target = edge_index
         
         # Get positions of connected points
         pos_source = node_pos[source]
         pos_target = grid_pos[target]
         
+        # Transform relative positions using point orientations
+        rel_pos = pos_target - pos_source
+        
+        # Apply orientations to decouple from global rotation
+        # [E, 3] @ [E, 3, 3] -> [E, 3]
+        # For each edge, we transform the relative position using the orientation of the source point
+        transformed_rel_pos = torch.bmm(rel_pos.unsqueeze(1), orientations[source]).squeeze(1)
+        
         # Create edge features from positions
-        edge_attr = torch.cat([pos_source, pos_target], dim=-1)
+        edge_attr = torch.cat([pos_source, transformed_rel_pos], dim=-1)
         edge_features = self.edge_model(edge_attr)
         
         # Combine with node features
@@ -175,71 +184,60 @@ class GridificationLayer(nn.Module):
         
         return grid_features
 
-class GridConvBlock(nn.Module):
-    """3D convolutional block for processing grid data"""
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, 
-                     stride=stride, padding=kernel_size//2, bias=False),
-            nn.BatchNorm3d(out_channels),
-            nn.SiLU(inplace=True),
-            nn.Conv3d(out_channels, out_channels, kernel_size=kernel_size,
-                     stride=1, padding=kernel_size//2, bias=False),
-            nn.BatchNorm3d(out_channels)
+class Block(nn.Module):
+    def __init__(self, in_channel, out_channel, stride=1):
+        super(Block, self).__init__()
+        self.left = nn.Sequential(
+            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm3d(out_channel),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm3d(out_channel)
         )
-        
         self.shortcut = nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, kernel_size=1, 
-                     stride=stride, bias=False),
-            nn.BatchNorm3d(out_channels)
+            nn.Conv3d(in_channel, out_channel, kernel_size=1, stride=stride, bias=False),
+            nn.BatchNorm3d(out_channel)
         )
-        
-        self.activation = nn.SiLU(inplace=True)
-        
-    def forward(self, x):
-        """Forward pass with residual connection"""
-        return self.activation(self.conv(x) + self.shortcut(x))
 
-class ResGridCNN(nn.Module):
-    """Residual 3D CNN for processing grid data"""
-    def __init__(self, in_channels, hidden_channels, num_classes, num_blocks=[2, 2, 2]):
-        super().__init__()
-        
-        self.input_bn = nn.BatchNorm3d(in_channels)
-        
-        self.layer1 = self._make_layer(in_channels, hidden_channels, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(hidden_channels, hidden_channels*2, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(hidden_channels*2, hidden_channels*4, num_blocks[2], stride=2)
-        
-        self.global_pool = nn.AdaptiveAvgPool3d(1)
-        self.fc = nn.Linear(hidden_channels*4, num_classes)
-        
-    def _make_layer(self, in_channels, out_channels, num_blocks, stride):
-        layers = []
-        # First block handles dimension change
-        layers.append(GridConvBlock(in_channels, out_channels, stride=stride))
-        
-        # Remaining blocks maintain dimensions
-        for _ in range(1, num_blocks):
-            layers.append(GridConvBlock(out_channels, out_channels, stride=1))
-            
-        return nn.Sequential(*layers)
-    
     def forward(self, x):
-        """
-        Forward pass
-        
-        Args:
-            x: Grid features [B, C, D, H, W]
-        """
-        x = self.input_bn(x)
-        
+        out = self.left(x)
+        out = out + self.shortcut(x)
+        out = nn.ReLU()(out)
+
+        return out
+
+class ResNet3D(nn.Module):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 128):
+        super(ResNet3D, self).__init__()
+
+        self.instance_norm1 = nn.BatchNorm3d(in_channels)
+
+        self.in_channels = in_channels
+
+        self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
+        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=2)
+
+        self.softmax = nn.functional.softmax
+        self.avgpool = nn.AdaptiveAvgPool3d(1)
+        self.fc = nn.Linear(in_channels * 4, num_classes)
+
+    def _make_layer(self, block, channels, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_channels, channels, stride))
+            self.in_channels = channels
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.instance_norm1(x)  # Normalize input
+
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         
-        x = self.global_pool(x)
+        x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         
@@ -270,10 +268,11 @@ class EquivariantGridModel(nn.Module):
         # Gridification layer
         self.gridification = GridificationLayer(hidden_nf, hidden_nf)
         
-        # 3D CNN for grid processing
-        self.grid_cnn = ResGridCNN(
+        # 3D CNN for grid processing using ResNet3D
+        self.grid_cnn = ResNet3D(
+            block=Block, 
+            layers=[2, 2, 2],
             in_channels=hidden_nf,
-            hidden_channels=hidden_nf//2,
             num_classes=out_node_nf
         )
         
@@ -299,8 +298,8 @@ class EquivariantGridModel(nn.Module):
         grid_pos = data.grid_coords
         grid_edge_index = data.grid_edge_index
         
-        # Apply gridification to map point cloud to grid
-        grid_features = self.gridification(h, x, grid_pos, grid_edge_index)
+        # Apply gridification with orientation-aware projection
+        grid_features = self.gridification(h, x, grid_pos, grid_edge_index, orientations)
         
         # Reshape grid features for CNN processing [B, C, D, H, W]
         grid_features = grid_features.reshape(
