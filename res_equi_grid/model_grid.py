@@ -169,25 +169,15 @@ class GridificationLayer(nn.Module):
         
     def update(self, messages, target_indices, num_grid_points):
         """Update grid features based on messages"""
-        # Get valid indices (those within bounds)
-        valid_mask = (target_indices >= 0) & (target_indices < num_grid_points)
-        valid_indices = target_indices[valid_mask]
-        valid_messages = messages[valid_mask]
+        # Count messages per grid point for normalization
+        num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
+        num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
         
-        # Initialize grid features with zeros
-        grid_features = torch.zeros(num_grid_points, messages.size(1), device=messages.device)
+        # Aggregate messages for each grid point
+        grid_features = scatter_add(messages, target_indices, dim=0, dim_size=num_grid_points)
         
-        # If we have valid indices, aggregate messages
-        if valid_indices.numel() > 0:
-            # Aggregate messages for each grid point
-            grid_features.index_add_(0, valid_indices, valid_messages)
-            
-            # Count messages per grid point for normalization
-            num_messages = torch.bincount(valid_indices, minlength=num_grid_points).to(messages.device)
-            num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
-            
-            # Normalize by number of messages
-            grid_features = grid_features / num_messages
+        # Normalize by number of messages
+        grid_features = grid_features / num_messages
         
         # Apply update network
         grid_features = self.update_model(grid_features)
