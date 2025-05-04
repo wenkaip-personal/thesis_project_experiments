@@ -172,17 +172,22 @@ class GridificationLayer(nn.Module):
         # Ensure target_indices is 1-D
         if target_indices.dim() != 1:
             target_indices = target_indices.view(-1)
-        
-        # Ensure target_indices are non-negative
-        if target_indices.numel() > 0:
-            min_index = target_indices.min().item()
-            if min_index < 0:
-                target_indices = torch.clamp(target_indices, min=0)
             
-            # Ensure num_grid_points is large enough to accommodate all indices
-            max_index = target_indices.max().item()
-            if max_index >= num_grid_points:
-                num_grid_points = max_index + 1
+        # Check if target_indices is empty and handle it
+        if target_indices.numel() == 0:
+            return torch.zeros(num_grid_points, messages.size(1), device=messages.device)
+            
+        # Handle negative indices safely without using min() directly
+        # Create mask for valid indices
+        valid_mask = (target_indices >= 0) & (target_indices < num_grid_points)
+        
+        # Apply mask to both indices and messages
+        target_indices = target_indices[valid_mask]
+        messages = messages[valid_mask]
+        
+        # Handle case where all indices were invalid
+        if target_indices.numel() == 0:
+            return torch.zeros(num_grid_points, messages.size(1), device=messages.device)
         
         # Count messages per grid point for normalization
         num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
