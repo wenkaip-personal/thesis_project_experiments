@@ -217,7 +217,7 @@ def main():
     # Adjust parameters for debug mode
     if args.debug:
         print("Running in DEBUG mode")
-        args.epochs = min(args.epochs, 2)  # Reduce epochs for faster iteration
+        args.epochs = min(args.epochs, 5)  # Reduce epochs for faster iteration
         args.hidden_nf = 32  # Reduce hidden dimension size
         max_samples = 100  # Limit dataset size
     else:
