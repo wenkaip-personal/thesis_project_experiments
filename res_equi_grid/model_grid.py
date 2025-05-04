@@ -169,6 +169,21 @@ class GridificationLayer(nn.Module):
         
     def update(self, messages, target_indices, num_grid_points):
         """Update grid features based on messages"""
+        # Ensure target_indices is 1-D
+        if target_indices.dim() != 1:
+            target_indices = target_indices.view(-1)
+        
+        # Ensure target_indices are non-negative
+        if target_indices.numel() > 0:
+            min_index = target_indices.min().item()
+            if min_index < 0:
+                target_indices = torch.clamp(target_indices, min=0)
+            
+            # Ensure num_grid_points is large enough to accommodate all indices
+            max_index = target_indices.max().item()
+            if max_index >= num_grid_points:
+                num_grid_points = max_index + 1
+        
         # Count messages per grid point for normalization
         num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
         num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
@@ -300,6 +315,21 @@ class EquivariantGridModel(nn.Module):
         
         # Apply gridification with orientation-aware projection
         grid_features = self.gridification(h, x, grid_pos, grid_edge_index, orientations)
+        
+        # Calculate expected number of grid points
+        expected_grid_points = batch_size * self.grid_size**3
+            
+        # Check if grid_features has the expected size
+        if grid_features.size(0) != expected_grid_points:
+            # Resize grid_features to expected size
+            if grid_features.size(0) < expected_grid_points:
+                # Pad with zeros if too small
+                padding = torch.zeros((expected_grid_points - grid_features.size(0), grid_features.size(1)), 
+                                    device=grid_features.device)
+                grid_features = torch.cat([grid_features, padding], dim=0)
+            else:
+                # Truncate if too large
+                grid_features = grid_features[:expected_grid_points]
         
         # Reshape grid features for CNN processing [B, C, D, H, W]
         grid_features = grid_features.reshape(
