@@ -127,6 +127,23 @@ class GridificationLayer(nn.Module):
             edge_index: Edge indices between point cloud and grid [2, E]
             orientations: Orientation matrices for each point [N, 3, 3]
         """
+        # Debug info
+        print(f"GridLayer.forward - shapes: nodes={node_pos.shape}, grid={grid_pos.shape}, edge_index={edge_index.shape}")
+        print(f"GridLayer.forward - edge_index min: {edge_index.min().item()}, max: {edge_index.max().item()}")
+        
+        # Check for invalid indices and filter them out
+        max_node_index = node_pos.size(0) - 1
+        max_grid_index = grid_pos.size(0) - 1
+        
+        invalid_source = (edge_index[0] < 0) | (edge_index[0] > max_node_index)
+        invalid_target = (edge_index[1] < 0) | (edge_index[1] > max_grid_index)
+        
+        if invalid_source.any() or invalid_target.any():
+            print(f"WARNING: edge_index contains {invalid_source.sum().item()} invalid source indices and "
+                f"{invalid_target.sum().item()} invalid target indices")
+            valid_mask = ~(invalid_source | invalid_target)
+            edge_index = edge_index[:, valid_mask]
+        
         # Process node features
         node_features = self.node_model(node_features)
         
@@ -169,8 +186,32 @@ class GridificationLayer(nn.Module):
         
     def update(self, messages, target_indices, num_grid_points):
         """Update grid features based on messages"""
+        # Debug info
+        print(f"Update method - target_indices shape: {target_indices.shape}")
+        print(f"Update method - target_indices min: {target_indices.min().item() if target_indices.numel() > 0 else 'empty'}, "
+            f"max: {target_indices.max().item() if target_indices.numel() > 0 else 'empty'}")
+        print(f"Update method - num_grid_points: {num_grid_points}")
+        
+        # Check for invalid indices and filter them out
+        valid_mask = (target_indices >= 0) & (target_indices < num_grid_points)
+        invalid_count = (~valid_mask).sum().item()
+        
+        if invalid_count > 0:
+            print(f"WARNING: Found {invalid_count} invalid indices in target_indices")
+            # Filter out invalid indices
+            messages = messages[valid_mask]
+            target_indices = target_indices[valid_mask]
+            print(f"After filtering - target_indices shape: {target_indices.shape}")
+        
         # Count messages per grid point for normalization
-        num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
+        try:
+            num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
+        except RuntimeError as e:
+            print(f"Error in bincount: {str(e)}")
+            print(f"target_indices dtype: {target_indices.dtype}")
+            print(f"target_indices unique values: {torch.unique(target_indices).tolist()}")
+            raise e
+        
         num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
         
         # Aggregate messages for each grid point
@@ -288,6 +329,22 @@ class EquivariantGridModel(nn.Module):
         """
         batch_size = data.ptr.size(0) - 1
         
+        # Debug info
+        print(f"Model.forward - Batch size: {batch_size}")
+        print(f"Model.forward - x shape: {x.shape}, grid_coords: {data.grid_coords.shape}")
+        print(f"Model.forward - edge_index: {edge_index.shape}, grid_edge_index: {data.grid_edge_index.shape}")
+        print(f"Model.forward - ptr: {data.ptr}")
+        
+        # Calculate total nodes and expected grid points
+        total_nodes = x.size(0)
+        total_grid_points = data.grid_coords.size(0)
+        expected_grid_points_per_sample = self.grid_size**3
+        
+        print(f"Model.forward - Total nodes: {total_nodes}, Total grid points: {total_grid_points}")
+        print(f"Model.forward - Expected grid points per sample: {expected_grid_points_per_sample}")
+        print(f"Model.forward - grid_edge_index min: {data.grid_edge_index.min().item()}, "
+            f"max: {data.grid_edge_index.max().item()}")
+        
         # Embed atoms
         h = self.atom_embedding(atoms)
         
@@ -298,15 +355,29 @@ class EquivariantGridModel(nn.Module):
         grid_pos = data.grid_coords
         grid_edge_index = data.grid_edge_index
         
+        # Check if indices are valid for the batched data
+        if grid_edge_index.max() >= total_nodes or grid_edge_index.min() < 0:
+            print(f"FIXING batch-incompatible grid_edge_index")
+            # Filter connections to keep only valid indices
+            valid_mask = (grid_edge_index[0] >= 0) & (grid_edge_index[0] < total_nodes) & \
+                        (grid_edge_index[1] >= 0) & (grid_edge_index[1] < total_grid_points)
+            grid_edge_index = grid_edge_index[:, valid_mask]
+        
         # Apply gridification with orientation-aware projection
         grid_features = self.gridification(h, x, grid_pos, grid_edge_index, orientations)
         
         # Reshape grid features for CNN processing [B, C, D, H, W]
-        grid_features = grid_features.reshape(
-            batch_size, 
-            self.grid_size, self.grid_size, self.grid_size, 
-            self.hidden_nf
-        ).permute(0, 4, 1, 2, 3)
+        try:
+            grid_features = grid_features.reshape(
+                batch_size, 
+                self.grid_size, self.grid_size, self.grid_size, 
+                self.hidden_nf
+            ).permute(0, 4, 1, 2, 3)
+        except RuntimeError as e:
+            print(f"Error during reshape: {str(e)}")
+            print(f"grid_features shape: {grid_features.shape}")
+            print(f"Expected shape after reshape: [{batch_size}, {self.grid_size}, {self.grid_size}, {self.grid_size}, {self.hidden_nf}]")
+            raise e
         
         # Process grid with 3D CNN
         logits = self.grid_cnn(grid_features)
