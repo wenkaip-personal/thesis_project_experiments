@@ -93,15 +93,15 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             
         try:
             # Basic batch debugging
-            print(f"\n----- BATCH {batch_count} -----")
-            print(f"Batch size: {batch.batch.max().item() + 1 if hasattr(batch, 'batch') else 'unknown'}")
-            print(f"Atoms shape: {batch.atoms.shape if hasattr(batch, 'atoms') else 'N/A'}")
+            # print(f"\n----- BATCH {batch_count} -----")
+            # print(f"Batch size: {batch.batch.max().item() + 1 if hasattr(batch, 'batch') else 'unknown'}")
+            # print(f"Atoms shape: {batch.atoms.shape if hasattr(batch, 'atoms') else 'N/A'}")
             
             # More detailed debugging for grid-related properties
-            if hasattr(batch, 'grid_coords') and hasattr(batch, 'grid_edge_index'):
-                print(f"Grid coords shape: {batch.grid_coords.shape}")
-                print(f"Grid edge index shape: {batch.grid_edge_index.shape}")
-                print(f"Grid edge index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
+            # if hasattr(batch, 'grid_coords') and hasattr(batch, 'grid_edge_index'):
+            #     print(f"Grid coords shape: {batch.grid_coords.shape}")
+            #     print(f"Grid edge index shape: {batch.grid_edge_index.shape}")
+            #     print(f"Grid edge index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
             
             # Move batch to device and run forward pass
             batch = batch.to(device)
@@ -133,16 +133,16 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                     continue
                 
         except RuntimeError as e:
-            print(f"\n----- ERROR IN BATCH {batch_count} -----")
-            print(f"Error: {str(e)}")
+            # print(f"\n----- ERROR IN BATCH {batch_count} -----")
+            # print(f"Error: {str(e)}")
             
             # Add detailed error diagnostics
             if hasattr(batch, 'grid_edge_index') and hasattr(batch, 'x') and hasattr(batch, 'grid_coords'):
-                print(f"Batch info:")
-                print(f"  x shape: {batch.x.shape}")
-                print(f"  grid_coords shape: {batch.grid_coords.shape}")
-                print(f"  grid_edge_index shape: {batch.grid_edge_index.shape}")
-                print(f"  grid_edge_index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
+                # print(f"Batch info:")
+                # print(f"  x shape: {batch.x.shape}")
+                # print(f"  grid_coords shape: {batch.grid_coords.shape}")
+                # print(f"  grid_edge_index shape: {batch.grid_edge_index.shape}")
+                # print(f"  grid_edge_index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
                 
                 # Check for index out of bounds
                 max_node_idx = batch.x.size(0) - 1
@@ -150,8 +150,8 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                 invalid_src = (batch.grid_edge_index[0] < 0) | (batch.grid_edge_index[0] > max_node_idx)
                 invalid_tgt = (batch.grid_edge_index[1] < 0) | (batch.grid_edge_index[1] > max_grid_idx)
                 
-                print(f"  Invalid source indices: {invalid_src.sum().item()}")
-                print(f"  Invalid target indices: {invalid_tgt.sum().item()}")
+                # print(f"  Invalid source indices: {invalid_src.sum().item()}")
+                # print(f"  Invalid target indices: {invalid_tgt.sum().item()}")
             
             if "CUDA out of memory" not in str(e): 
                 raise(e)
@@ -161,7 +161,7 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             
         # Calculate and print the time taken for this batch
         batch_time = time.time() - batch_start_time
-        print(f"Batch {total_count} processing time: {batch_time:.4f} seconds")
+        # print(f"Batch {total_count} processing time: {batch_time:.4f} seconds")
         
         batch_count += 1        
         t.set_description(f"{total_loss/total_count:.8f}")
@@ -248,7 +248,7 @@ def main():
     # Adjust parameters for debug mode
     if args.debug:
         print("Running in DEBUG mode")
-        args.epochs = min(args.epochs, 5)  # Reduce epochs for faster iteration
+        args.epochs = min(args.epochs, 10)  # Reduce epochs for faster iteration
         args.hidden_nf = 32  # Reduce hidden dimension size
         max_samples = 100  # Limit dataset size
     else:
