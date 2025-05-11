@@ -12,5 +12,7 @@ res_en_transformer_baseline/__pycache__/dataset.cpython-39.pyc
 res_en_transformer_baseline/__pycache__/model.cpython-39.pyc
 res_en_transformer_baseline/models/
 res_en_transformer_baseline/outputs/
+res_equi_grid/__pycache__/dataset_grid.cpython-39.pyc
+res_equi_grid/__pycache__/model_grid.cpython-39.pyc
 res_equi_grid/models/
 res_equi_grid/outputs/
