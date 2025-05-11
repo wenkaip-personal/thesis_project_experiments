@@ -4,12 +4,10 @@ models/en_transformer/.DS_Store
 .DS_Store
 models/egnn/__pycache__/egnn_clean.cpython-39.pyc
 models/en_transformer/__pycache__/en_transformer.cpython-39.pyc
-res_en_egnn_baseline/res_en_egnn.job
 res_en_egnn_baseline/__pycache__/dataset.cpython-39.pyc
 res_en_egnn_baseline/__pycache__/model.cpython-39.pyc
 res_en_egnn_baseline/models/
 res_en_egnn_baseline/outputs/
-res_en_transformer_baseline/res_en_transformer.job
 res_en_transformer_baseline/__pycache__/dataset.cpython-39.pyc
 res_en_transformer_baseline/__pycache__/model.cpython-39.pyc
 res_en_transformer_baseline/models/
