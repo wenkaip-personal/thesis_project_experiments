@@ -56,17 +56,17 @@ model_id = float(time.time())
 os.makedirs(args.model_path, exist_ok=True)
 
 # Start a new wandb run to track this script
-# run = wandb.init(
-#     project="res",
-#     config={
-#         "learning_rate": args.lr,
-#         "architecture": "ResEquiGrid",
-#         "dataset": "RES",
-#         "epochs": args.epochs,
-#         "grid_size": args.grid_size,
-#         "spacing": args.spacing,
-#     },
-# )
+run = wandb.init(
+    project="res",
+    config={
+        "learning_rate": args.lr,
+        "architecture": "ResEquiGrid",
+        "dataset": "RES",
+        "epochs": args.epochs,
+        "grid_size": args.grid_size,
+        "spacing": args.spacing,
+    },
+)
 
 def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
@@ -167,11 +167,11 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         t.set_description(f"{total_loss/total_count:.8f}")
         
         # Log metrics to wandb
-        # run.log({
-        #     "loss": total_loss / total_count,
-        #     "accuracy": metrics_dict['accuracy'](targets, predicts),
-        #     "batch_time": batch_time
-        # })
+        run.log({
+            "loss": total_loss / total_count,
+            "accuracy": metrics_dict['accuracy'](targets, predicts),
+            "batch_time": batch_time
+        })
         
     accuracy = metrics_dict['accuracy'](targets, predicts)
     return total_loss / total_count, accuracy
@@ -215,13 +215,13 @@ def train(model, train_dataset, val_dataset):
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
 
         # Log metrics to wandb
-        # run.log({
-        #     "train_loss": train_loss,
-        #     "train_acc": train_acc,
-        #     "val_loss": val_loss,
-        #     "val_acc": val_acc,
-        #     "learning_rate": optimizer.param_groups[0]['lr']
-        # })
+        run.log({
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "learning_rate": optimizer.param_groups[0]['lr']
+        })
 
 def test(model, test_dataset):
     model.load_state_dict(torch.load(args.test))
@@ -236,10 +236,10 @@ def test(model, test_dataset):
     print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
 
     # Log metrics to wandb
-    # run.log({
-    #     "test_loss": test_loss,
-    #     "test_acc": test_acc
-    # })
+    run.log({
+        "test_loss": test_loss,
+        "test_acc": test_acc
+    })
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}
@@ -288,4 +288,4 @@ def main():
 if __name__ == "__main__":
     main()
     # Finish the run and upload any remaining data
-    # run.finish()
+    run.finish()
