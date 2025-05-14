@@ -248,7 +248,7 @@ def main():
     # Adjust parameters for debug mode
     if args.debug:
         print("Running in DEBUG mode")
-        max_samples = 1  # Limit dataset size
+        max_samples = 10  # Limit dataset size
     else:
         max_samples = None
     
