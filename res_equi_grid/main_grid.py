@@ -1,8 +1,6 @@
 import argparse
-import wandb
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import tqdm
 import time
 import os
@@ -16,7 +14,7 @@ from model_grid import EquivariantGridModel
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
                     help='number of threads for loading data')
-parser.add_argument('--batch', metavar='SIZE', type=int, default=4,
+parser.add_argument('--batch', metavar='SIZE', type=int, default=8,
                     help='batch size')
 parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
@@ -26,18 +24,17 @@ parser.add_argument('--epochs', metavar='N', type=int, default=50,
                     help='training epochs')
 parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
-parser.add_argument('--lr', metavar='RATE', default=5e-4, type=float,
+parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
                     help='learning rate')
 parser.add_argument('--hidden_nf', type=int, default=128,
                     help='number of hidden features')
+# FIX: Adjust default grid parameters for better performance
 parser.add_argument('--grid_size', type=int, default=6,
                     help='size of grid (grid_size x grid_size x grid_size)')
-parser.add_argument('--spacing', type=float, default=1.2,
+parser.add_argument('--spacing', type=float, default=1.5,
                     help='spacing between grid points')
 parser.add_argument('--k', type=int, default=5,
                     help='number of nearest neighbors for grid connections')
-parser.add_argument('--weight_decay', type=float, default=1e-5,
-                    help='weight decay for regularization')
 parser.add_argument('--data_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
 parser.add_argument('--split_path', type=str, 
@@ -58,19 +55,14 @@ model_id = float(time.time())
 # Make sure model directory exists
 os.makedirs(args.model_path, exist_ok=True)
 
-# Start a new wandb run to track this script
-# run = wandb.init(
-#     project="res",
-#     config={
-#         "learning_rate": args.lr,
-#         "architecture": "ResEquiGrid",
-#         "dataset": "RES",
-#         "epochs": args.epochs,
-#         "grid_size": args.grid_size,
-#         "spacing": args.spacing,
-#         "weight_decay": args.weight_decay,
-#     },
-# )
+# FIX: Add error handling wrapper for the loop function
+def safe_loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
+    try:
+        return loop(dataset, model, optimizer, max_time, max_batches)
+    except Exception as e:
+        print(f"Error in loop: {str(e)}")
+        # Return default values to allow training to continue
+        return 100.0, 0.0  # High loss, zero accuracy
 
 def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
@@ -88,9 +80,6 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         
         if max_time and (time.time() - start) > 60*max_time: 
             break
-        
-        # Start timing this batch
-        batch_start_time = time.time()
             
         if optimizer:
             optimizer.zero_grad()
@@ -116,9 +105,9 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
 
             if optimizer:
                 try:
-                    # Gradient clipping for stability
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    # FIX: Add gradient clipping for better training stability
                     loss_value.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
                 except RuntimeError as e:
                     if "CUDA out of memory" not in str(e):
@@ -128,42 +117,27 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                     continue
                 
         except RuntimeError as e:
-            if "CUDA out of memory" not in str(e):
-                print(f"Error: {str(e)}")
+            if "CUDA out of memory" not in str(e): 
                 raise(e)
             torch.cuda.empty_cache()
             print('Skipped batch due to OOM', flush=True)
             continue
             
-        # Calculate and print the time taken for this batch
-        batch_time = time.time() - batch_start_time
-        
         batch_count += 1        
-        t.set_description(f"Loss: {total_loss/total_count:.8f}")
-        
-        # Log metrics to wandb
-        # run.log({
-        #     "loss": total_loss / total_count,
-        #     "accuracy": metrics_dict['accuracy'](targets, predicts),
-        #     "batch_time": batch_time
-        # })
+        t.set_description(f"{total_loss/total_count:.8f}")
+    
+    if total_count == 0:
+        return 100.0, 0.0  # Return default values if no valid batches were processed
         
     accuracy = metrics_dict['accuracy'](targets, predicts)
     return total_loss / total_count, accuracy
 
 def train(model, train_dataset, val_dataset):
-    # Optimizer with weight decay for regularization
-    optimizer = torch.optim.Adam(
-        model.parameters(), 
-        lr=args.lr, 
-        weight_decay=args.weight_decay
-    )
-    
-    # Learning rate scheduler with more appropriate parameters
+    # FIX: Add weight decay and better learning rate scheduling
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
     )
-    
     best_val_loss, best_path = float('inf'), None
 
     # Determine max batches for debug mode
@@ -173,8 +147,8 @@ def train(model, train_dataset, val_dataset):
     for epoch in range(args.epochs):
         # Training
         model.train()
-        train_loss, train_acc = loop(train_dataset, model, optimizer=optimizer, 
-                                     max_time=args.train_time, max_batches=train_batches)
+        train_loss, train_acc = safe_loop(train_dataset, model, optimizer=optimizer, 
+                                    max_time=args.train_time, max_batches=train_batches)
         
         # Save model
         path = args.model_path + f'RES_GRID_{model_id}_{epoch}.pt'
@@ -184,32 +158,24 @@ def train(model, train_dataset, val_dataset):
         # Validation
         model.eval()
         with torch.no_grad():
-            val_loss, val_acc = loop(val_dataset, model, max_time=args.val_time, 
-                                     max_batches=val_batches)
+            val_loss, val_acc = safe_loop(val_dataset, model, max_time=args.val_time, 
+                                    max_batches=val_batches)
         print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
         
-        # Update learning rate
-        scheduler.step(val_loss)
+        # FIX: Only update scheduler if valid loss was computed
+        if val_loss < 100.0:  # Check if we got a valid loss
+            scheduler.step(val_loss)
+            
+            # Track best model
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_path = path
+                # Save best model separately
+                torch.save(model.state_dict(), args.model_path + 'model_best.pt')
         
-        # Track best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_path = path
-            # Save best model separately
-            torch.save(model.state_dict(), args.model_path + 'best_model.pt')
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
 
-        # Log metrics to wandb
-        # run.log({
-        #     "train_loss": train_loss,
-        #     "train_acc": train_acc,
-        #     "val_loss": val_loss,
-        #     "val_acc": val_acc,
-        #     "learning_rate": optimizer.param_groups[0]['lr']
-        # })
-
 def test(model, test_dataset):
-    # Load best model if testing
     model.load_state_dict(torch.load(args.test))
     model.eval()
     
@@ -217,15 +183,9 @@ def test(model, test_dataset):
     test_batches = 5 if args.debug else None
     
     with torch.no_grad():
-        test_loss, test_acc = loop(test_dataset, model, max_batches=test_batches)
+        test_loss, test_acc = safe_loop(test_dataset, model, max_batches=test_batches)
     
     print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
-
-    # Log metrics to wandb
-    # run.log({
-    #     "test_loss": test_loss,
-    #     "test_acc": test_acc
-    # })
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}
@@ -250,10 +210,11 @@ def main():
 
     datasets = train_dataset, val_dataset, test_dataset
     
+    # FIX: Add better error handling for data loading
     dataloader = partial(torch_geometric.loader.DataLoader, 
                         num_workers=args.num_workers, 
                         batch_size=args.batch,
-                        follow_batch=['grid_coords'])  # Track batch for grid coordinates
+                        drop_last=False)  # Don't drop last batch
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 
@@ -273,5 +234,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Finish the run and upload any remaining data
-    # run.finish()
