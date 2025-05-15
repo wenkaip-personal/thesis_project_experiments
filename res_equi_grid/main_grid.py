@@ -1,4 +1,5 @@
 import argparse
+import wandb
 import torch
 import torch.nn as nn
 import tqdm
@@ -54,6 +55,20 @@ model_id = float(time.time())
 
 # Make sure model directory exists
 os.makedirs(args.model_path, exist_ok=True)
+
+# Start a new wandb run to track this script
+# run = wandb.init(
+#     project="res",
+#     config={
+#         "learning_rate": args.lr,
+#         "architecture": "ResEquiGrid",
+#         "dataset": "RES",
+#         "epochs": args.epochs,
+#         "grid_size": args.grid_size,
+#         "spacing": args.spacing,
+#         "weight_decay": args.weight_decay,
+#     },
+# )
 
 # FIX: Add error handling wrapper for the loop function
 def safe_loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
@@ -125,6 +140,13 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             
         batch_count += 1        
         t.set_description(f"{total_loss/total_count:.8f}")
+        
+        # Log metrics to wandb
+        # run.log({
+        #     "loss": total_loss / total_count,
+        #     "accuracy": metrics_dict['accuracy'](targets, predicts),
+        #     "batch_time": batch_time
+        # })
     
     if total_count == 0:
         return 100.0, 0.0  # Return default values if no valid batches were processed
@@ -174,6 +196,15 @@ def train(model, train_dataset, val_dataset):
                 torch.save(model.state_dict(), args.model_path + 'model_best.pt')
         
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
+        
+        # Log metrics to wandb
+        # run.log({
+        #     "train_loss": train_loss,
+        #     "train_acc": train_acc,
+        #     "val_loss": val_loss,
+        #     "val_acc": val_acc,
+        #     "learning_rate": optimizer.param_groups[0]['lr']
+        # })
 
 def test(model, test_dataset):
     model.load_state_dict(torch.load(args.test))
@@ -186,6 +217,12 @@ def test(model, test_dataset):
         test_loss, test_acc = safe_loop(test_dataset, model, max_batches=test_batches)
     
     print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
+    
+    # Log metrics to wandb
+    # run.log({
+    #     "test_loss": test_loss,
+    #     "test_acc": test_acc
+    # })
 
 def get_metrics():
     return {'accuracy': metrics.accuracy}
@@ -234,3 +271,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Finish the run and upload any remaining data
+    # run.finish()
