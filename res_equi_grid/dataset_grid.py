@@ -25,7 +25,7 @@ def _normalize(tensor, dim=-1):
     Normalizes a `torch.Tensor` along dimension `dim` without `nan`s.
     '''
     return torch.nan_to_num(
-        torch.div(tensor, torch.norm(tensor, dim=dim, keepdim=True)))
+        torch.div(tensor, torch.norm(tensor, dim=dim, keepdim=True) + 1e-8))
 
 def _rbf(D, D_min=0., D_max=20., D_count=16, device='cpu'):
     '''
@@ -62,8 +62,8 @@ class GridTransform:
     '''
     Transform for converting atomic structures to grid-based representations.
     '''
-    def __init__(self, edge_cutoff=4.5, num_rbf=16, grid_size=9, spacing=2.0, 
-                 k=3, device='cpu'):
+    def __init__(self, edge_cutoff=4.5, num_rbf=16, grid_size=6, spacing=1.2, 
+                 k=5, device='cpu'):
         self.edge_cutoff = edge_cutoff
         self.num_rbf = num_rbf
         self.device = device
@@ -76,9 +76,11 @@ class GridTransform:
         '''
         Generate a regular grid with specified size and spacing.
         '''
-        start = -spacing
-        end = spacing
-        # Create evenly spaced coordinates in the given range
+        # Create evenly spaced coordinates centered at 0
+        half_size = (grid_size - 1) / 2
+        start = -half_size * spacing
+        end = half_size * spacing
+        
         coords = torch.linspace(start, end, grid_size)
         
         # Create 3D grid using meshgrid
@@ -101,36 +103,27 @@ class GridTransform:
         atoms = torch.as_tensor(list(map(_element_mapping, df.element)),
                                 dtype=torch.long, device=self.device)
 
-        # Create point cloud graph
-        edge_index = torch_cluster.radius_graph(coords, r=self.edge_cutoff)
+        # Create point cloud graph with kNN connections instead of radius
+        # This is more reliable and consistent than radius graphs
+        edge_index = torch_cluster.knn_graph(coords, k=10, loop=False)
         edge_s, edge_v = _edge_features(coords, edge_index, 
                             D_max=self.edge_cutoff, num_rbf=self.num_rbf, device=self.device)
         
         # Add grid information
         grid_coords = self.grid_coords.to(self.device)
         
-        # Compute bidirectional KNN connections between atoms and grid points
-        row_1, col_1 = torch_cluster.knn(coords, grid_coords, k=self.k)
-        row_2, col_2 = torch_cluster.knn(grid_coords, coords, k=self.k)
+        # Use a more reliable single-strategy approach with KNN
+        # Connect atoms to grid points (source -> target)
+        row, col = torch_cluster.knn(coords, grid_coords, k=self.k)
+        grid_edge_index_atoms_to_grid = torch.stack([row, col])
         
-        # Combine connections for both directions
-        grid_edge_index = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
-        )
+        # Connect grid points to atoms (source -> target)
+        row, col = torch_cluster.knn(grid_coords, coords, k=self.k)
+        grid_edge_index_grid_to_atoms = torch.stack([row, col])
         
-        # Also add radius-based connections for better coverage
-        row_1, col_1 = torch_cluster.radius(coords, grid_coords, r=self.edge_cutoff)
-        row_2, col_2 = torch_cluster.radius(grid_coords, coords, r=self.edge_cutoff)
-        
-        edge_index_radius = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
-        )
-        
-        # Combine all connections and remove duplicates
-        grid_edge_index = torch.cat((grid_edge_index, edge_index_radius), dim=1)
-        grid_edge_index = torch.unique(grid_edge_index, dim=1)
+        # Combine for bidirectional connectivity
+        grid_edge_index = torch.cat([grid_edge_index_atoms_to_grid, 
+                                    grid_edge_index_grid_to_atoms], dim=1)
         
         # Create data object
         data = Data(
@@ -141,7 +134,8 @@ class GridTransform:
             edge_v=edge_v,
             grid_coords=grid_coords,
             grid_edge_index=grid_edge_index,
-            grid_size=self.grid_size
+            grid_size=self.grid_size,
+            num_grid_points=grid_coords.size(0)
         )
         
         return data
@@ -161,7 +155,7 @@ class GridRESDataset(IterableDataset):
     :param spacing: spacing between grid points
     :param k: number of nearest neighbors for grid connections
     '''
-    def __init__(self, lmdb_dataset, split_path, grid_size=9, spacing=2.0, k=3, max_samples=None):
+    def __init__(self, lmdb_dataset, split_path, grid_size=6, spacing=1.2, k=5, max_samples=None):
         self.dataset = LMDBDataset(lmdb_dataset)
         self.idx = list(map(int, open(split_path).read().split()))
         if max_samples is not None:
@@ -187,26 +181,34 @@ class GridRESDataset(IterableDataset):
             random.shuffle(indices)
             
         for idx in indices:
-            data = self.dataset[self.idx[idx]]
-            atoms = data['atoms']
-            
-            for sub in data['labels'].itertuples():
-                _, num, aa = sub.subunit.split('_')
-                num, aa = int(num), _amino_acids(aa)
-                if aa == 20:  # Skip unknown amino acids
-                    continue
+            try:
+                data = self.dataset[self.idx[idx]]
+                atoms = data['atoms']
+                
+                for sub in data['labels'].itertuples():
+                    _, num, aa = sub.subunit.split('_')
+                    num, aa = int(num), _amino_acids(aa)
+                    if aa == 20:  # Skip unknown amino acids
+                        continue
+                        
+                    # Extract atoms for this subunit
+                    my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
                     
-                # Extract atoms for this subunit
-                my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
-                
-                # Find CA atom index
-                ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
-                if len(ca_idx) != 1:
-                    continue
-                
-                # Apply grid transform
-                graph = self.transform(my_atoms)
-                graph.label = aa
-                graph.ca_idx = int(ca_idx)
-                
-                yield graph
+                    # Skip if too few atoms
+                    if len(my_atoms) < 5:
+                        continue
+                    
+                    # Find CA atom index
+                    ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
+                    if len(ca_idx) != 1:
+                        continue
+                    
+                    # Apply grid transform
+                    graph = self.transform(my_atoms)
+                    graph.label = aa
+                    graph.ca_idx = int(ca_idx)
+                    
+                    yield graph
+            except Exception as e:
+                # Skip problematic entries
+                continue

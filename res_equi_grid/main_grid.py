@@ -2,6 +2,7 @@ import argparse
 import wandb
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import tqdm
 import time
 import os
@@ -15,7 +16,7 @@ from model_grid import EquivariantGridModel
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
                     help='number of threads for loading data')
-parser.add_argument('--batch', metavar='SIZE', type=int, default=8,
+parser.add_argument('--batch', metavar='SIZE', type=int, default=4,
                     help='batch size')
 parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
@@ -25,16 +26,18 @@ parser.add_argument('--epochs', metavar='N', type=int, default=50,
                     help='training epochs')
 parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
-parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
+parser.add_argument('--lr', metavar='RATE', default=5e-4, type=float,
                     help='learning rate')
 parser.add_argument('--hidden_nf', type=int, default=128,
                     help='number of hidden features')
-parser.add_argument('--grid_size', type=int, default=9,
+parser.add_argument('--grid_size', type=int, default=6,
                     help='size of grid (grid_size x grid_size x grid_size)')
-parser.add_argument('--spacing', type=float, default=2.0,
+parser.add_argument('--spacing', type=float, default=1.2,
                     help='spacing between grid points')
-parser.add_argument('--k', type=int, default=3,
+parser.add_argument('--k', type=int, default=5,
                     help='number of nearest neighbors for grid connections')
+parser.add_argument('--weight_decay', type=float, default=1e-5,
+                    help='weight decay for regularization')
 parser.add_argument('--data_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
 parser.add_argument('--split_path', type=str, 
@@ -65,6 +68,7 @@ os.makedirs(args.model_path, exist_ok=True)
 #         "epochs": args.epochs,
 #         "grid_size": args.grid_size,
 #         "spacing": args.spacing,
+#         "weight_decay": args.weight_decay,
 #     },
 # )
 
@@ -92,17 +96,6 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             optimizer.zero_grad()
             
         try:
-            # Basic batch debugging
-            # print(f"\n----- BATCH {batch_count} -----")
-            # print(f"Batch size: {batch.batch.max().item() + 1 if hasattr(batch, 'batch') else 'unknown'}")
-            # print(f"Atoms shape: {batch.atoms.shape if hasattr(batch, 'atoms') else 'N/A'}")
-            
-            # More detailed debugging for grid-related properties
-            # if hasattr(batch, 'grid_coords') and hasattr(batch, 'grid_edge_index'):
-            #     print(f"Grid coords shape: {batch.grid_coords.shape}")
-            #     print(f"Grid edge index shape: {batch.grid_edge_index.shape}")
-            #     print(f"Grid edge index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
-            
             # Move batch to device and run forward pass
             batch = batch.to(device)
             out = model(batch.atoms, batch.x, batch.edge_index, batch)
@@ -123,6 +116,8 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
 
             if optimizer:
                 try:
+                    # Gradient clipping for stability
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     loss_value.backward()
                     optimizer.step()
                 except RuntimeError as e:
@@ -133,27 +128,8 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                     continue
                 
         except RuntimeError as e:
-            # print(f"\n----- ERROR IN BATCH {batch_count} -----")
-            # print(f"Error: {str(e)}")
-            
-            # Add detailed error diagnostics
-            if hasattr(batch, 'grid_edge_index') and hasattr(batch, 'x') and hasattr(batch, 'grid_coords'):
-                # print(f"Batch info:")
-                # print(f"  x shape: {batch.x.shape}")
-                # print(f"  grid_coords shape: {batch.grid_coords.shape}")
-                # print(f"  grid_edge_index shape: {batch.grid_edge_index.shape}")
-                # print(f"  grid_edge_index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
-                
-                # Check for index out of bounds
-                max_node_idx = batch.x.size(0) - 1
-                max_grid_idx = batch.grid_coords.size(0) - 1
-                invalid_src = (batch.grid_edge_index[0] < 0) | (batch.grid_edge_index[0] > max_node_idx)
-                invalid_tgt = (batch.grid_edge_index[1] < 0) | (batch.grid_edge_index[1] > max_grid_idx)
-                
-                # print(f"  Invalid source indices: {invalid_src.sum().item()}")
-                # print(f"  Invalid target indices: {invalid_tgt.sum().item()}")
-            
-            if "CUDA out of memory" not in str(e): 
+            if "CUDA out of memory" not in str(e):
+                print(f"Error: {str(e)}")
                 raise(e)
             torch.cuda.empty_cache()
             print('Skipped batch due to OOM', flush=True)
@@ -161,10 +137,9 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
             
         # Calculate and print the time taken for this batch
         batch_time = time.time() - batch_start_time
-        # print(f"Batch {total_count} processing time: {batch_time:.4f} seconds")
         
         batch_count += 1        
-        t.set_description(f"{total_loss/total_count:.8f}")
+        t.set_description(f"Loss: {total_loss/total_count:.8f}")
         
         # Log metrics to wandb
         # run.log({
@@ -177,10 +152,18 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     return total_loss / total_count, accuracy
 
 def train(model, train_dataset, val_dataset):
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.7, patience=5, min_lr=1e-6
+    # Optimizer with weight decay for regularization
+    optimizer = torch.optim.Adam(
+        model.parameters(), 
+        lr=args.lr, 
+        weight_decay=args.weight_decay
     )
+    
+    # Learning rate scheduler with more appropriate parameters
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
+    )
+    
     best_val_loss, best_path = float('inf'), None
 
     # Determine max batches for debug mode
@@ -212,6 +195,8 @@ def train(model, train_dataset, val_dataset):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_path = path
+            # Save best model separately
+            torch.save(model.state_dict(), args.model_path + 'best_model.pt')
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
 
         # Log metrics to wandb
@@ -224,6 +209,7 @@ def train(model, train_dataset, val_dataset):
         # })
 
 def test(model, test_dataset):
+    # Load best model if testing
     model.load_state_dict(torch.load(args.test))
     model.eval()
     
@@ -263,9 +249,11 @@ def main():
     test_dataset = dataset(split_path=split_path + 'test_indices.txt', max_samples=max_samples)
 
     datasets = train_dataset, val_dataset, test_dataset
+    
     dataloader = partial(torch_geometric.loader.DataLoader, 
                         num_workers=args.num_workers, 
-                        batch_size=args.batch)
+                        batch_size=args.batch,
+                        follow_batch=['grid_coords'])  # Track batch for grid coordinates
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 
