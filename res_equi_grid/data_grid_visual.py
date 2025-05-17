@@ -81,10 +81,7 @@ def visualize_sample(data, sample_idx=0):
     valid_source_mask = edge_index[0] < atom_count
     valid_edges = edge_index[:, valid_source_mask]
     
-    # Plot a subset of edges to avoid overcrowding
-    edge_subset = np.random.choice(valid_edges.shape[1], min(100, valid_edges.shape[1]), replace=False)
-    
-    for i in edge_subset:
+    for i in valid_edges:
         src_idx = valid_edges[0, i]
         tgt_idx = valid_edges[1, i]
         
