@@ -85,13 +85,11 @@ def visualize_sample(data, sample_idx=0):
         src_idx = valid_edges[0, i]
         tgt_idx = valid_edges[1, i]
         
-        # Only plot if target is a grid point
-        if tgt_idx >= atom_count:
-            src_pos = atom_pos[src_idx]
-            tgt_pos = grid_pos[tgt_idx - atom_count]  # Adjust index for grid points
-            ax3.plot([src_pos[0], tgt_pos[0]], 
-                     [src_pos[1], tgt_pos[1]], 
-                     [src_pos[2], tgt_pos[2]], 'gray', alpha=0.2)
+        src_pos = atom_pos[src_idx]
+        tgt_pos = grid_pos[tgt_idx]
+        ax3.plot([src_pos[0], tgt_pos[0]], 
+                    [src_pos[1], tgt_pos[1]], 
+                    [src_pos[2], tgt_pos[2]], 'gray', alpha=0.2)
     
     ax3.set_title('Atoms + Grid + Connections')
     ax3.set_xlabel('X')
