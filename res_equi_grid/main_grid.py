@@ -29,12 +29,11 @@ parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
                     help='learning rate')
 parser.add_argument('--hidden_nf', type=int, default=128,
                     help='number of hidden features')
-# FIX: Adjust default grid parameters for better performance
-parser.add_argument('--grid_size', type=int, default=6,
+parser.add_argument('--grid_size', type=int, default=9,
                     help='size of grid (grid_size x grid_size x grid_size)')
-parser.add_argument('--spacing', type=float, default=1.5,
+parser.add_argument('--spacing', type=float, default=2.0,
                     help='spacing between grid points')
-parser.add_argument('--k', type=int, default=5,
+parser.add_argument('--k', type=int, default=3,
                     help='number of nearest neighbors for grid connections')
 parser.add_argument('--data_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
@@ -66,18 +65,8 @@ os.makedirs(args.model_path, exist_ok=True)
 #         "epochs": args.epochs,
 #         "grid_size": args.grid_size,
 #         "spacing": args.spacing,
-#         "weight_decay": args.weight_decay,
 #     },
 # )
-
-# FIX: Add error handling wrapper for the loop function
-def safe_loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
-    try:
-        return loop(dataset, model, optimizer, max_time, max_batches)
-    except Exception as e:
-        print(f"Error in loop: {str(e)}")
-        # Return default values to allow training to continue
-        return 100.0, 0.0  # High loss, zero accuracy
 
 def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
@@ -95,11 +84,25 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         
         if max_time and (time.time() - start) > 60*max_time: 
             break
+        
+        # Start timing this batch
+        batch_start_time = time.time()
             
         if optimizer:
             optimizer.zero_grad()
             
         try:
+            # Basic batch debugging
+            # print(f"\n----- BATCH {batch_count} -----")
+            # print(f"Batch size: {batch.batch.max().item() + 1 if hasattr(batch, 'batch') else 'unknown'}")
+            # print(f"Atoms shape: {batch.atoms.shape if hasattr(batch, 'atoms') else 'N/A'}")
+            
+            # More detailed debugging for grid-related properties
+            # if hasattr(batch, 'grid_coords') and hasattr(batch, 'grid_edge_index'):
+            #     print(f"Grid coords shape: {batch.grid_coords.shape}")
+            #     print(f"Grid edge index shape: {batch.grid_edge_index.shape}")
+            #     print(f"Grid edge index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
+            
             # Move batch to device and run forward pass
             batch = batch.to(device)
             out = model(batch.atoms, batch.x, batch.edge_index, batch)
@@ -120,9 +123,7 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
 
             if optimizer:
                 try:
-                    # FIX: Add gradient clipping for better training stability
                     loss_value.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
                 except RuntimeError as e:
                     if "CUDA out of memory" not in str(e):
@@ -132,12 +133,36 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
                     continue
                 
         except RuntimeError as e:
+            # print(f"\n----- ERROR IN BATCH {batch_count} -----")
+            # print(f"Error: {str(e)}")
+            
+            # Add detailed error diagnostics
+            if hasattr(batch, 'grid_edge_index') and hasattr(batch, 'x') and hasattr(batch, 'grid_coords'):
+                # print(f"Batch info:")
+                # print(f"  x shape: {batch.x.shape}")
+                # print(f"  grid_coords shape: {batch.grid_coords.shape}")
+                # print(f"  grid_edge_index shape: {batch.grid_edge_index.shape}")
+                # print(f"  grid_edge_index min/max: {batch.grid_edge_index.min().item()} / {batch.grid_edge_index.max().item()}")
+                
+                # Check for index out of bounds
+                max_node_idx = batch.x.size(0) - 1
+                max_grid_idx = batch.grid_coords.size(0) - 1
+                invalid_src = (batch.grid_edge_index[0] < 0) | (batch.grid_edge_index[0] > max_node_idx)
+                invalid_tgt = (batch.grid_edge_index[1] < 0) | (batch.grid_edge_index[1] > max_grid_idx)
+                
+                # print(f"  Invalid source indices: {invalid_src.sum().item()}")
+                # print(f"  Invalid target indices: {invalid_tgt.sum().item()}")
+            
             if "CUDA out of memory" not in str(e): 
                 raise(e)
             torch.cuda.empty_cache()
             print('Skipped batch due to OOM', flush=True)
             continue
             
+        # Calculate and print the time taken for this batch
+        batch_time = time.time() - batch_start_time
+        # print(f"Batch {total_count} processing time: {batch_time:.4f} seconds")
+        
         batch_count += 1        
         t.set_description(f"{total_loss/total_count:.8f}")
         
@@ -147,18 +172,14 @@ def loop(dataset, model, optimizer=None, max_time=None, max_batches=None):
         #     "accuracy": metrics_dict['accuracy'](targets, predicts),
         #     "batch_time": batch_time
         # })
-    
-    if total_count == 0:
-        return 100.0, 0.0  # Return default values if no valid batches were processed
         
     accuracy = metrics_dict['accuracy'](targets, predicts)
     return total_loss / total_count, accuracy
 
 def train(model, train_dataset, val_dataset):
-    # FIX: Add weight decay and better learning rate scheduling
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
+        optimizer, mode='min', factor=0.7, patience=5, min_lr=1e-6
     )
     best_val_loss, best_path = float('inf'), None
 
@@ -169,8 +190,8 @@ def train(model, train_dataset, val_dataset):
     for epoch in range(args.epochs):
         # Training
         model.train()
-        train_loss, train_acc = safe_loop(train_dataset, model, optimizer=optimizer, 
-                                    max_time=args.train_time, max_batches=train_batches)
+        train_loss, train_acc = loop(train_dataset, model, optimizer=optimizer, 
+                                     max_time=args.train_time, max_batches=train_batches)
         
         # Save model
         path = args.model_path + f'RES_GRID_{model_id}_{epoch}.pt'
@@ -180,23 +201,19 @@ def train(model, train_dataset, val_dataset):
         # Validation
         model.eval()
         with torch.no_grad():
-            val_loss, val_acc = safe_loop(val_dataset, model, max_time=args.val_time, 
-                                    max_batches=val_batches)
+            val_loss, val_acc = loop(val_dataset, model, max_time=args.val_time, 
+                                     max_batches=val_batches)
         print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
         
-        # FIX: Only update scheduler if valid loss was computed
-        if val_loss < 100.0:  # Check if we got a valid loss
-            scheduler.step(val_loss)
-            
-            # Track best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_path = path
-                # Save best model separately
-                torch.save(model.state_dict(), args.model_path + 'model_best.pt')
+        # Update learning rate
+        scheduler.step(val_loss)
         
+        # Track best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_path = path
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
-        
+
         # Log metrics to wandb
         # run.log({
         #     "train_loss": train_loss,
@@ -214,10 +231,10 @@ def test(model, test_dataset):
     test_batches = 5 if args.debug else None
     
     with torch.no_grad():
-        test_loss, test_acc = safe_loop(test_dataset, model, max_batches=test_batches)
+        test_loss, test_acc = loop(test_dataset, model, max_batches=test_batches)
     
     print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
-    
+
     # Log metrics to wandb
     # run.log({
     #     "test_loss": test_loss,
@@ -246,12 +263,9 @@ def main():
     test_dataset = dataset(split_path=split_path + 'test_indices.txt', max_samples=max_samples)
 
     datasets = train_dataset, val_dataset, test_dataset
-    
-    # FIX: Add better error handling for data loading
     dataloader = partial(torch_geometric.loader.DataLoader, 
                         num_workers=args.num_workers, 
-                        batch_size=args.batch,
-                        drop_last=False)  # Don't drop last batch
+                        batch_size=args.batch)
 
     train_dataset, val_dataset, test_dataset = map(dataloader, datasets)
 

@@ -46,37 +46,17 @@ class EquivariantLayer(nn.Module):
 
     def gram_schmidt_batch(self, v1, v2):
         """
-        Apply Gram-Schmidt to create orthogonal basis with improved numerical stability
+        Apply Gram-Schmidt to create orthogonal basis
         """
-        # FIX: Improve numerical stability with larger epsilon and fallback for degenerate cases
-        eps = 1e-6
-        
         # Normalize first vector
-        v1_norm = torch.norm(v1, dim=-1, keepdim=True)
-        mask1 = (v1_norm > eps).float()
-        n1 = torch.where(mask1 > 0.5, v1 / (v1_norm + eps), 
-                         torch.tensor([1.0, 0.0, 0.0], device=v1.device).expand_as(v1))
+        n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True) + 1e-8)
         
         # Make second vector orthogonal to first
         n2_prime = v2 - (n1 * v2).sum(dim=-1, keepdim=True) * n1
-        n2_norm = torch.norm(n2_prime, dim=-1, keepdim=True)
-        mask2 = (n2_norm > eps).float()
-        
-        # If second vector becomes too small after projection, use a perpendicular vector to first
-        fallback = torch.stack([
-            -n1[:, 1], n1[:, 0], torch.zeros_like(n1[:, 0])
-        ], dim=1)
-        # Make sure fallback is normalized and orthogonal
-        fallback = fallback - (n1 * fallback).sum(dim=-1, keepdim=True) * n1
-        fallback_norm = torch.norm(fallback, dim=-1, keepdim=True)
-        fallback = fallback / (fallback_norm + eps)
-        
-        n2 = torch.where(mask2 > 0.5, n2_prime / (n2_norm + eps), fallback)
+        n2 = n2_prime / (torch.norm(n2_prime, dim=-1, keepdim=True) + 1e-8)
         
         # Create third vector using cross product for right-handed system
         n3 = torch.cross(n1, n2, dim=-1)
-        n3_norm = torch.norm(n3, dim=-1, keepdim=True)
-        n3 = n3 / (n3_norm + eps)
         
         # Stack to create orientation matrices [N, 3, 3]
         return torch.stack([n1, n2, n3], dim=-1)
@@ -84,12 +64,9 @@ class EquivariantLayer(nn.Module):
     def omega(self, dist):
         """Smoothing function for distance weighting"""
         r_max = 4.5  # Maximum radius
-        # FIX: Add clipping to prevent numerical issues
-        dist_clipped = torch.clamp(dist, min=0.0, max=r_max)
-        
-        out = 1 - (self.p+1)*(self.p+2)/2 * (dist_clipped/r_max)**self.p + \
-              self.p*(self.p+2) * (dist_clipped/r_max)**(self.p+1) - \
-              self.p*(self.p+1)/2 * (dist_clipped/r_max)**(self.p+2)
+        out = 1 - (self.p+1)*(self.p+2)/2 * (dist/r_max)**self.p + \
+              self.p*(self.p+2) * (dist/r_max)**(self.p+1) - \
+              self.p*(self.p+1)/2 * (dist/r_max)**(self.p+2)
         return out
     
     def message(self, x_i, x_j, dist, pos_i, pos_j):
@@ -105,10 +82,7 @@ class EquivariantLayer(nn.Module):
         coe = self.omega(dist)
         
         # Get normalized direction vector
-        eps = 1e-6  # FIX: Increase epsilon for better numerical stability
-        direction = pos_i - pos_j
-        direction_norm = torch.norm(direction, dim=-1, keepdim=True)
-        norm_vec = direction / (direction_norm + eps)
+        norm_vec = (pos_i - pos_j) / (torch.norm(pos_i - pos_j, dim=-1, keepdim=True) + 1e-8)
         
         return norm_vec * coe * mes_1, norm_vec * coe * mes_2
 
@@ -153,24 +127,23 @@ class GridificationLayer(nn.Module):
             edge_index: Edge indices between point cloud and grid [2, E]
             orientations: Orientation matrices for each point [N, 3, 3]
         """
-        # FIX: Add validation checks for inputs
-        if edge_index.numel() == 0:
-            # Handle empty edge index case
-            batch_size = 1
-            grid_features = torch.zeros((grid_pos.size(0), node_features.size(1)), 
-                                       device=node_pos.device)
-            return grid_features
-            
+        # Debug info
+        # print(f"GridLayer.forward - shapes: nodes={node_pos.shape}, grid={grid_pos.shape}, edge_index={edge_index.shape}")
+        # print(f"GridLayer.forward - edge_index min: {edge_index.min().item()}, max: {edge_index.max().item()}")
+        
         # Check for invalid indices and filter them out
         max_node_index = node_pos.size(0) - 1
         max_grid_index = grid_pos.size(0) - 1
         
-        valid_mask = (edge_index[0] >= 0) & (edge_index[0] <= max_node_index) & \
-                     (edge_index[1] >= 0) & (edge_index[1] <= max_grid_index)
+        invalid_source = (edge_index[0] < 0) | (edge_index[0] > max_node_index)
+        invalid_target = (edge_index[1] < 0) | (edge_index[1] > max_grid_index)
         
-        if not valid_mask.all():
+        if invalid_source.any() or invalid_target.any():
+            # print(f"WARNING: edge_index contains {invalid_source.sum().item()} invalid source indices and "
+            #     f"{invalid_target.sum().item()} invalid target indices")
+            valid_mask = ~(invalid_source | invalid_target)
             edge_index = edge_index[:, valid_mask]
-            
+        
         # Process node features
         node_features = self.node_model(node_features)
         
@@ -193,12 +166,9 @@ class GridificationLayer(nn.Module):
         # Transform relative positions using point orientations
         rel_pos = pos_target - pos_source
         
-        # FIX: Add safety check for empty tensors
-        if rel_pos.numel() == 0:
-            return torch.zeros((0, node_features.size(1)), device=node_features.device)
-        
         # Apply orientations to decouple from global rotation
         # [E, 3] @ [E, 3, 3] -> [E, 3]
+        # For each edge, we transform the relative position using the orientation of the source point
         transformed_rel_pos = torch.bmm(rel_pos.unsqueeze(1), orientations[source]).squeeze(1)
         
         # Create edge features from positions
@@ -216,33 +186,39 @@ class GridificationLayer(nn.Module):
         
     def update(self, messages, target_indices, num_grid_points):
         """Update grid features based on messages"""
-        # FIX: Handle empty messages case
-        if messages.numel() == 0 or target_indices.numel() == 0:
-            return torch.zeros((num_grid_points, messages.size(1) if messages.numel() > 0 else 128), 
-                              device=messages.device if messages.numel() > 0 else 'cpu')
-            
+        # Debug info
+        # print(f"Update method - target_indices shape: {target_indices.shape}")
+        # print(f"Update method - target_indices min: {target_indices.min().item() if target_indices.numel() > 0 else 'empty'}, "
+        #     f"max: {target_indices.max().item() if target_indices.numel() > 0 else 'empty'}")
+        # print(f"Update method - num_grid_points: {num_grid_points}")
+        
         # Check for invalid indices and filter them out
         valid_mask = (target_indices >= 0) & (target_indices < num_grid_points)
+        invalid_count = (~valid_mask).sum().item()
         
-        if not valid_mask.all():
+        if invalid_count > 0:
+            # print(f"WARNING: Found {invalid_count} invalid indices in target_indices")
+            # Filter out invalid indices
             messages = messages[valid_mask]
             target_indices = target_indices[valid_mask]
-            
-        # Handle the case where all indices were invalid
-        if target_indices.numel() == 0:
-            return torch.zeros((num_grid_points, messages.size(1)), device=messages.device)
-            
+            # print(f"After filtering - target_indices shape: {target_indices.shape}")
+        
         # Count messages per grid point for normalization
-        counts = torch.zeros(num_grid_points, device=messages.device)
-        counts.scatter_add_(0, target_indices, torch.ones_like(target_indices, dtype=torch.float))
-        counts = torch.clamp(counts, min=1).unsqueeze(-1)
+        try:
+            num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
+        except RuntimeError as e:
+            # print(f"Error in bincount: {str(e)}")
+            # print(f"target_indices dtype: {target_indices.dtype}")
+            # print(f"target_indices unique values: {torch.unique(target_indices).tolist()}")
+            raise e
+        
+        num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
         
         # Aggregate messages for each grid point
-        grid_features = torch.zeros((num_grid_points, messages.size(1)), device=messages.device)
-        grid_features.scatter_add_(0, target_indices.unsqueeze(-1).expand(-1, messages.size(1)), messages)
+        grid_features = scatter_add(messages, target_indices, dim=0, dim_size=num_grid_points)
         
         # Normalize by number of messages
-        grid_features = grid_features / counts
+        grid_features = grid_features / num_messages
         
         # Apply update network
         grid_features = self.update_model(grid_features)
@@ -334,10 +310,9 @@ class EquivariantGridModel(nn.Module):
         self.gridification = GridificationLayer(hidden_nf, hidden_nf)
         
         # 3D CNN for grid processing using ResNet3D
-        # FIX: Simplify architecture for better training dynamics
         self.grid_cnn = ResNet3D(
             block=Block, 
-            layers=[1, 1, 1],  # Reduced layer depth for better training
+            layers=[2, 2, 2],
             in_channels=hidden_nf,
             num_classes=out_node_nf
         )
@@ -354,14 +329,21 @@ class EquivariantGridModel(nn.Module):
         """
         batch_size = data.ptr.size(0) - 1
         
+        # Debug info
+        # print(f"Model.forward - Batch size: {batch_size}")
+        # print(f"Model.forward - x shape: {x.shape}, grid_coords: {data.grid_coords.shape}")
+        # print(f"Model.forward - edge_index: {edge_index.shape}, grid_edge_index: {data.grid_edge_index.shape}")
+        # print(f"Model.forward - ptr: {data.ptr}")
+        
         # Calculate total nodes and expected grid points
         total_nodes = x.size(0)
         total_grid_points = data.grid_coords.size(0)
         expected_grid_points_per_sample = self.grid_size**3
         
-        # FIX: Define these variables properly before using them
-        grid_pos = data.grid_coords
-        grid_edge_index = data.grid_edge_index
+        # print(f"Model.forward - Total nodes: {total_nodes}, Total grid points: {total_grid_points}")
+        # print(f"Model.forward - Expected grid points per sample: {expected_grid_points_per_sample}")
+        # print(f"Model.forward - grid_edge_index min: {data.grid_edge_index.min().item()}, "
+        #     f"max: {data.grid_edge_index.max().item()}")
         
         # Embed atoms
         h = self.atom_embedding(atoms)
@@ -369,8 +351,13 @@ class EquivariantGridModel(nn.Module):
         # Learn orientations
         orientations = self.equivariant_layer(h, x, edge_index)
         
+        # Project grid positions into local frame
+        grid_pos = data.grid_coords
+        grid_edge_index = data.grid_edge_index
+        
         # Check if indices are valid for the batched data
-        if grid_edge_index.numel() > 0 and (grid_edge_index.max() >= total_nodes or grid_edge_index.min() < 0):
+        if grid_edge_index.max() >= total_nodes or grid_edge_index.min() < 0:
+            # print(f"FIXING batch-incompatible grid_edge_index")
             # Filter connections to keep only valid indices
             valid_mask = (grid_edge_index[0] >= 0) & (grid_edge_index[0] < total_nodes) & \
                         (grid_edge_index[1] >= 0) & (grid_edge_index[1] < total_grid_points)
@@ -379,33 +366,18 @@ class EquivariantGridModel(nn.Module):
         # Apply gridification with orientation-aware projection
         grid_features = self.gridification(h, x, grid_pos, grid_edge_index, orientations)
         
-        # FIX: Better handling of grid feature reshaping
+        # Reshape grid features for CNN processing [B, C, D, H, W]
         try:
-            expected_size = batch_size * self.grid_size**3
-            if grid_features.size(0) != expected_size:
-                # Pad or truncate to match expected size
-                if grid_features.size(0) < expected_size:
-                    pad_size = expected_size - grid_features.size(0)
-                    padding = torch.zeros((pad_size, grid_features.size(1)), 
-                                         device=grid_features.device)
-                    grid_features = torch.cat([grid_features, padding], dim=0)
-                else:
-                    grid_features = grid_features[:expected_size]
-                    
-            # Reshape grid features for CNN processing [B, C, D, H, W]
             grid_features = grid_features.reshape(
                 batch_size, 
                 self.grid_size, self.grid_size, self.grid_size, 
                 self.hidden_nf
             ).permute(0, 4, 1, 2, 3)
         except RuntimeError as e:
-            # Fallback to a simpler approach if reshape fails
-            print(f"Warning: Grid reshape failed. Using fallback approach. Error: {str(e)}")
-            # Create empty features with correct shape
-            grid_features = torch.zeros(
-                (batch_size, self.hidden_nf, self.grid_size, self.grid_size, self.grid_size),
-                device=x.device
-            )
+            # print(f"Error during reshape: {str(e)}")
+            # print(f"grid_features shape: {grid_features.shape}")
+            # print(f"Expected shape after reshape: [{batch_size}, {self.grid_size}, {self.grid_size}, {self.grid_size}, {self.hidden_nf}]")
+            raise e
         
         # Process grid with 3D CNN
         logits = self.grid_cnn(grid_features)
