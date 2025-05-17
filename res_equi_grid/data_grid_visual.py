@@ -77,21 +77,28 @@ def visualize_sample(data, sample_idx=0):
     # Extract edges for this sample
     edge_index = data.grid_edge_index.cpu().numpy()
     
-    # Filter edges for this sample (this is approximate as we don't have batch info for edges)
+    # Filter edges for this sample
     valid_source_mask = edge_index[0] < atom_count
     valid_edges = edge_index[:, valid_source_mask]
     
-    for i in valid_edges:
+    # Counter for edges plotted
+    edges_plotted = 0
+    
+    # Plot ALL edges (not just a subset)
+    for i in range(valid_edges.shape[1]):
         src_idx = valid_edges[0, i]
         tgt_idx = valid_edges[1, i]
         
-        src_pos = atom_pos[src_idx]
-        tgt_pos = grid_pos[tgt_idx]
-        ax3.plot([src_pos[0], tgt_pos[0]], 
-                    [src_pos[1], tgt_pos[1]], 
-                    [src_pos[2], tgt_pos[2]], 'gray', alpha=0.2)
+        # Only plot if target is a grid point
+        if tgt_idx >= atom_count:
+            src_pos = atom_pos[src_idx]
+            tgt_pos = grid_pos[tgt_idx - atom_count]  # Adjust index for grid points
+            ax3.plot([src_pos[0], tgt_pos[0]], 
+                     [src_pos[1], tgt_pos[1]], 
+                     [src_pos[2], tgt_pos[2]], 'gray', alpha=0.05)  # Reduced alpha for clarity
+            edges_plotted += 1
     
-    ax3.set_title('Atoms + Grid + Connections')
+    ax3.set_title(f'Atoms + Grid + Connections\nEdges plotted: {edges_plotted}')
     ax3.set_xlabel('X')
     ax3.set_ylabel('Y')
     ax3.set_zlabel('Z')
@@ -110,11 +117,11 @@ print(f"Labels: {batch.label}")
 
 # Visualize the first sample
 fig1 = visualize_sample(batch, sample_idx=0)
-plt.savefig('res_equi_grid/sample_0_visualization.png', dpi=300, bbox_inches='tight')
+plt.savefig('sample_0_visualization_all_edges.png', dpi=300, bbox_inches='tight')
 
 # Visualize the second sample
 fig2 = visualize_sample(batch, sample_idx=1)
-plt.savefig('res_equi_grid/sample_1_visualization.png', dpi=300, bbox_inches='tight')
+plt.savefig('sample_1_visualization_all_edges.png', dpi=300, bbox_inches='tight')
 
 # Edge statistics
 edge_index = batch.grid_edge_index.cpu().numpy()
