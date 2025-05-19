@@ -1,212 +1,204 @@
 import os
 import torch
-import math
-import random
-import numpy as np
-from atom3d.datasets import LMDBDataset
-from torch.utils.data import IterableDataset, DataLoader
-from torch_geometric.data import Data, Batch
-import torch_cluster
+from torch_geometric.data import Data, InMemoryDataset, DataLoader as PyGDataLoader
+import torch_geometric
+from pathlib import Path
+import json
+from torch_cluster import knn, radius
+from typing import Any
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-# Mapping functions
-_element_mapping = lambda x: {
-    'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'S': 5, 'Cl': 6, 'CL': 6, 'P': 7
-}.get(x, 8)
+dataroot = os.environ['DATAROOT']
+dictroot =  Path(dataroot) / 'protein'
 
-_amino_acids = lambda x: {
-    'ALA': 0, 'ARG': 1, 'ASN': 2, 'ASP': 3, 'CYS': 4, 'GLU': 5, 'GLN': 6, 
-    'GLY': 7, 'HIS': 8, 'ILE': 9, 'LEU': 10, 'LYS': 11, 'MET': 12, 'PHE': 13, 
-    'PRO': 14, 'SER': 15, 'THR': 16, 'TRP': 17, 'TYR': 18, 'VAL': 19
-}.get(x, 20)
+class GridData(Data):
+    def __inc__(self, key: str, value: Any, *args, **kwargs) -> Any:
+        if 'grid_edge_index' in key:
+            return torch.tensor([[getattr(self, f'coords').size(0)], [getattr(self, f'grid_coords').size(0)]])
+        else:
+            return super().__inc__(key, value, *args, **kwargs)
 
-def _normalize(tensor, dim=-1):
-    '''
-    Normalizes a `torch.Tensor` along dimension `dim` without `nan`s.
-    '''
-    return torch.nan_to_num(
-        torch.div(tensor, torch.norm(tensor, dim=dim, keepdim=True)))
-
-def _rbf(D, D_min=0., D_max=20., D_count=16, device='cpu'):
-    '''
-    From https://github.com/jingraham/neurips19-graph-protein-design
-    
-    Returns an RBF embedding of `torch.Tensor` `D` along a new axis=-1.
-    That is, if `D` has shape [...dims], then the returned tensor will have
-    shape [...dims, D_count].
-    '''
-    D_mu = torch.linspace(D_min, D_max, D_count, device=device)
-    D_mu = D_mu.view([1, -1])
-    D_sigma = (D_max - D_min) / D_count
-    D_expand = torch.unsqueeze(D, -1)
-
-    RBF = torch.exp(-((D_expand - D_mu) / D_sigma) ** 2)
-    return RBF
-
-def _edge_features(coords, edge_index, D_max=4.5, num_rbf=16, device='cpu'):
-    '''
-    Create edge features from atomic coordinates and edge indices.
-    '''
-    E_vectors = coords[edge_index[0]] - coords[edge_index[1]]
-    rbf = _rbf(E_vectors.norm(dim=-1), 
-               D_max=D_max, D_count=num_rbf, device=device)
-
-    edge_s = rbf
-    edge_v = _normalize(E_vectors).unsqueeze(-2)
-
-    edge_s, edge_v = map(torch.nan_to_num, (edge_s, edge_v))
-
-    return edge_s, edge_v
-
-class GridTransform:
-    '''
-    Transform for converting atomic structures to grid-based representations.
-    '''
-    def __init__(self, edge_cutoff=4.5, num_rbf=16, grid_size=9, spacing=2.0, 
-                 k=3, device='cpu'):
-        self.edge_cutoff = edge_cutoff
-        self.num_rbf = num_rbf
-        self.device = device
-        self.grid_size = grid_size
-        self.spacing = spacing
-        self.k = k
-        self.grid_coords = self._generate_grid(grid_size, spacing)
+    def __cat_dim__(self, key: str, value: Any, *args, **kwargs) -> Any:
+        if 'grid_edge_index' in key or "edge_index" in key:
+            return 1
+        else:
+            return 0
         
-    def _generate_grid(self, grid_size, spacing):
-        '''
-        Generate a regular grid with specified size and spacing.
-        '''
+        
+class Protein:
+    """
+    Protein Dataset
+
+    """
+
+    def __init__(self, partition, radius=4.5, k=2, knn=True, size=9, spacing=8):
+        with open(str(dictroot / f'{partition}_dict.json'), 'r') as f:
+            self.dict = json.load(f)
+        self.knn = knn
+        self.radius = radius
+        self.k = k
+        self.grid_coords = self.generate_grid(n=size, spacing=spacing)
+        self.size = size
+        self.radius_table = torch.tensor([1.7, 1.45, 1.37, 1.7])
+
+    def generate_grid(self, n, spacing=1):
+        """
+        Generate a grid within a given range.
+        
+        Parameters:
+        - n (int): The size of the grid along one dimension. This will create a n x n x n grid.
+        - start (float): The starting value of the range.
+        - end (float): The ending value of the range.
+        
+        Returns:
+        - grid_coordinates (Tensor): The coordinates of the grid points.
+        """
         start = -spacing
         end = spacing
-        # Create evenly spaced coordinates in the given range
-        coords = torch.linspace(start, end, grid_size)
+        # 在给定范围内创建均匀的间距坐标
+        coords = torch.linspace(start, end, n)
         
-        # Create 3D grid using meshgrid
-        xx, yy, zz = torch.meshgrid(coords, coords, coords, indexing='ij')
+        xx, yy, zz = torch.meshgrid(coords, coords, coords)
         
-        # Flatten the grid to get all coordinates
         grid_coordinates = torch.stack((xx.flatten(), yy.flatten(), zz.flatten()), dim=1)
-        return grid_coordinates
-            
-    def __call__(self, df):
-        '''
-        Transform ATOM3D dataframe to grid representation.
-        
-        :param df: `pandas.DataFrame` of atomic coordinates in ATOM3D format
-        :return: `torch_geometric.data.Data` structure with grid representation
-        '''
-        # Process atomic data
-        coords = torch.as_tensor(df[['x', 'y', 'z']].to_numpy(),
-                                dtype=torch.float32, device=self.device)
-        atoms = torch.as_tensor(list(map(_element_mapping, df.element)),
-                                dtype=torch.long, device=self.device)
+        return grid_coordinates.to(torch.float64)
+    
+    def __getitem__(self, i):
+        data_path = self.dict[str(i)]
+        coords_path = Path(data_path).parent.parent / "atom_coords.pt"
+        data = torch.load(data_path)
+        coords = torch.load(str(coords_path))[data.node_sub_index]
+        cb_coords = coords[data.cb_index]
+        coords = coords - cb_coords
+        coords = coords@data.rot.T
+        data.coords = coords.to(torch.float64)
 
-        # Create point cloud graph
-        edge_index = torch_cluster.radius_graph(coords, r=self.edge_cutoff)
-        edge_s, edge_v = _edge_features(coords, edge_index, 
-                            D_max=self.edge_cutoff, num_rbf=self.num_rbf, device=self.device)
-        
-        # Add grid information
-        grid_coords = self.grid_coords.to(self.device)
-        
-        # Compute bidirectional KNN connections between atoms and grid points
-        row_1, col_1 = torch_cluster.knn(coords, grid_coords, k=self.k)
-        row_2, col_2 = torch_cluster.knn(grid_coords, coords, k=self.k)
-        
-        # Combine connections for both directions
-        grid_edge_index = torch.stack(
+        data.grid_coords = self.grid_coords
+        row_1, col_1 = knn(data.coords, self.grid_coords, k=self.k)
+        row_2, col_2 = knn(self.grid_coords, data.coords, k=self.k)
+
+        edge_index_knn = torch.stack(
             (torch.cat((col_1, row_2)),
             torch.cat((row_1, col_2)))
         )
-        
-        # Also add radius-based connections for better coverage
-        row_1, col_1 = torch_cluster.radius(coords, grid_coords, r=self.edge_cutoff)
-        row_2, col_2 = torch_cluster.radius(grid_coords, coords, r=self.edge_cutoff)
-        
+
+        row_1, col_1 = radius(data.coords, self.grid_coords, r=4)
+        row_2, col_2 = radius(self.grid_coords, data.coords, r=4)
         edge_index_radius = torch.stack(
             (torch.cat((col_1, row_2)),
             torch.cat((row_1, col_2)))
         )
-        
-        # Combine all connections and remove duplicates
-        grid_edge_index = torch.cat((grid_edge_index, edge_index_radius), dim=1)
-        grid_edge_index = torch.unique(grid_edge_index, dim=1)
-        
-        # Create data object
-        data = Data(
-            x=coords,
-            atoms=atoms,
-            edge_index=edge_index,
-            edge_s=edge_s,
-            edge_v=edge_v,
-            grid_coords=grid_coords,
-            grid_edge_index=grid_edge_index,
-            grid_size=self.grid_size
-        )
-        
-        return data
+        edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
 
-class GridRESDataset(IterableDataset):
-    '''
-    A `torch.utils.data.IterableDataset` wrapper around an ATOM3D RES dataset
-    with grid representation.
+        edge_index = torch_geometric.utils.coalesce(edge_index)
+        data.grid_edge_index = edge_index
+        grid_data = GridData()
+        grid_data = grid_data.from_dict(data.to_dict())
+        grid_data.grid_size = self.size
+        grid_data.res_types[data.cb_index] = 20
+        return grid_data
+
+    def __len__(self):
+        return len(self.dict)
+
+class ProteinInMemoryDataset(InMemoryDataset):
+    def __init__(
+        self,
+        root=os.environ['DATAROOT'],
+        transform=None,
+        pre_transform=None,
+        pre_filter=None,
+        partition="train",
+        radius=2,
+        k=2,
+        knn=True,
+        size=9,
+        spacing=8
+    ):
+        self.partition = partition
+        self.k=k
+        self.knn=knn
+        self.size=size
+        self.spacing=spacing
+        self.radius = radius
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def processed_file_names(self):
+        return [f"{self.partition}_data.pt"]
+
+    def process(self):
+        self.dataset = Protein(
+            partition=self.partition, radius=self.radius, k=self.k, 
+            knn=self.knn, size=self.size, 
+            spacing=self.spacing
+        )
+        # Read data into huge `Data` list.
+        data_list = []
+        for graph in tqdm(self.dataset, total=self.dataset.__len__()):
+            data_list.append(graph)
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+class ProteinDataset:
+    def __init__(self, batch_size=100, knn=True, radius=2, k=3, size=9, spacing=8):
+        torch_geometric.seed.seed_everything(0)
+        self.batch_size = batch_size
+ 
+        self.train_dataset = Protein(
+            partition='train',
+            knn=knn,
+            radius=radius,
+            k=k,
+            size=size,
+            spacing=spacing
+        )
+        self.test_dataset = Protein(
+            partition='test',
+            knn=knn,
+            radius=radius,
+            k=k,
+            size=size,
+            spacing=spacing
+        )
+        self.valid_dataset = Protein(
+            partition='val',
+            knn=knn,
+            radius=radius,
+            k=k,
+            size=size,
+            spacing=spacing
+        )
     
-    On each iteration, returns a `torch_geometric.data.Data` graph with grid representation
-    including the attribute `label` encoding the masked residue identity, 
-    `ca_idx` for the node index of the alpha carbon, and all structural attributes.
-    
-    :param lmdb_dataset: path to ATOM3D dataset
-    :param split_path: path to the ATOM3D split file
-    :param grid_size: size of the grid (grid_size x grid_size x grid_size)
-    :param spacing: spacing between grid points
-    :param k: number of nearest neighbors for grid connections
-    '''
-    def __init__(self, lmdb_dataset, split_path, grid_size=9, spacing=2.0, k=3, max_samples=None):
-        self.dataset = LMDBDataset(lmdb_dataset)
-        self.idx = list(map(int, open(split_path).read().split()))
-        if max_samples is not None:
-            self.idx = self.idx[:max_samples]
-        self.transform = GridTransform(grid_size=grid_size, spacing=spacing, k=k)
-        
-    def __iter__(self):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            gen = self._dataset_generator(list(range(len(self.idx))), 
-                      shuffle=True)
-        else:  
-            per_worker = int(math.ceil(len(self.idx) / float(worker_info.num_workers)))
-            worker_id = worker_info.id
-            iter_start = worker_id * per_worker
-            iter_end = min(iter_start + per_worker, len(self.idx))
-            gen = self._dataset_generator(list(range(len(self.idx)))[iter_start:iter_end],
-                      shuffle=True)
-        return gen
-    
-    def _dataset_generator(self, indices, shuffle=True):
-        if shuffle: 
-            random.shuffle(indices)
-            
-        for idx in indices:
-            data = self.dataset[self.idx[idx]]
-            atoms = data['atoms']
-            
-            for sub in data['labels'].itertuples():
-                _, num, aa = sub.subunit.split('_')
-                num, aa = int(num), _amino_acids(aa)
-                if aa == 20:  # Skip unknown amino acids
-                    continue
-                    
-                # Extract atoms for this subunit
-                my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
-                
-                # Find CA atom index
-                ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
-                if len(ca_idx) != 1:
-                    continue
-                
-                # Apply grid transform
-                graph = self.transform(my_atoms)
-                graph.label = aa
-                graph.ca_idx = int(ca_idx)
-                
-                yield graph
+    def train_loader(self):
+        split = "train"
+        distributed = torch.distributed.is_initialized()
+        sampler = (DistributedSampler(self.train_dataset) if distributed else None)
+        shuffle = True if split == 'train' and not distributed else False
+        drop_last = split == 'train'
+        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)
+
+    def val_loader(self):
+        split = "valid"
+        distributed = torch.distributed.is_initialized()
+        sampler = (DistributedSampler(self.valid_dataset) if distributed else None)
+        shuffle = True if split == 'valid' and not distributed else False
+        drop_last = split == 'train'
+        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)     
+
+    def test_loader(self):
+        split = "test"
+        distributed = torch.distributed.is_initialized()
+        sampler = (DistributedSampler(self.test_dataset) if distributed else None)
+        shuffle = True if split == 'test' and not distributed else False
+        drop_last = split == 'train'
+        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)

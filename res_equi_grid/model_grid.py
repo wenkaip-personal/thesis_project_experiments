@@ -1,242 +1,104 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import global_mean_pool, global_add_pool
-from torch_scatter import scatter_add
-import numpy as np
+import torch_geometric
+from torch_geometric.nn import global_mean_pool, global_add_pool, radius_graph, knn, radius
 
-class EquivariantLayer(nn.Module):
-    """
-    Equivariant layer for learning orientations
-    """
-    def __init__(self, in_features, hidden_features):
-        super().__init__()
+class equivariant_layer(nn.Module):
+    def __init__(self, hidden_features):
+        super(equivariant_layer, self).__init__()
+        self.hidden_features = hidden_features
         self.message_net1 = nn.Sequential(
-            nn.Linear(2*in_features+1, hidden_features),
-            nn.SiLU(),
+            nn.Linear(2*hidden_features+1, hidden_features),
+            nn.ReLU(),
             nn.Linear(hidden_features, 1),
         )
         self.message_net2 = nn.Sequential(
-            nn.Linear(2*in_features+1, hidden_features),
-            nn.SiLU(),
+            nn.Linear(2*hidden_features+1, hidden_features),
+            nn.ReLU(),
             nn.Linear(hidden_features, 1),
         )
-        self.p = 5  # Polynomial basis degree
+        self.p = 5
 
-    def forward(self, x, pos, edge_index):
-        """
-        Learn orientations for each point
-        
-        Args:
-            x: Node features [N, F]
-            pos: Node positions [N, 3]
-            edge_index: Edge indices [2, E]
-        """
-        # Message passing
-        row, col = edge_index
-        dist = (pos[row] - pos[col]).norm(dim=-1, keepdim=True)
-        vec1, vec2 = self.message(x[row], x[col], dist, pos[row], pos[col])
-        
-        # Aggregate messages
-        vec1_out = scatter_add(vec1, col, dim=0, dim_size=x.size(0))
-        vec2_out = scatter_add(vec2, col, dim=0, dim_size=x.size(0))
-        
-        # Apply Gram-Schmidt orthogonalization
+    def forward(self, x, pos, batch):
+        edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
+        dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
+        vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
+        vec1_out, vec2_out = global_add_pool(vec1, edge_index[0]), global_add_pool(vec2, edge_index[0])
+        vec1_out = global_mean_pool(vec1_out, batch)
+        vec2_out = global_mean_pool(vec2_out, batch)
         return self.gram_schmidt_batch(vec1_out, vec2_out)
 
     def gram_schmidt_batch(self, v1, v2):
-        """
-        Apply Gram-Schmidt to create orthogonal basis
-        """
-        # Normalize first vector
-        n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True) + 1e-8)
-        
-        # Make second vector orthogonal to first
+        n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
         n2_prime = v2 - (n1 * v2).sum(dim=-1, keepdim=True) * n1
-        n2 = n2_prime / (torch.norm(n2_prime, dim=-1, keepdim=True) + 1e-8)
-        
-        # Create third vector using cross product for right-handed system
+        n2 = n2_prime / (torch.norm(n2_prime, dim=-1, keepdim=True)+1e-8)
         n3 = torch.cross(n1, n2, dim=-1)
-        
-        # Stack to create orientation matrices [N, 3, 3]
-        return torch.stack([n1, n2, n3], dim=-1)
+        return torch.stack([n1, n2, n3], dim=-2)
     
     def omega(self, dist):
-        """Smoothing function for distance weighting"""
-        r_max = 4.5  # Maximum radius
-        out = 1 - (self.p+1)*(self.p+2)/2 * (dist/r_max)**self.p + \
-              self.p*(self.p+2) * (dist/r_max)**(self.p+1) - \
-              self.p*(self.p+1)/2 * (dist/r_max)**(self.p+2)
+        out = 1 - (self.p+1)*(self.p+2)/2 * (dist/4.5)**self.p + self.p*(self.p+2) * (dist/4.5)**(self.p+1) - self.p*(self.p+1)/2 * (dist/4.5)**(self.p+2)
         return out
     
     def message(self, x_i, x_j, dist, pos_i, pos_j):
-        """Create messages between nodes"""
-        # Combine features and distance
         x_ij = torch.cat([x_i, x_j, dist], dim=-1)
-        
-        # Get message weights
         mes_1 = self.message_net1(x_ij)
         mes_2 = self.message_net2(x_ij)
-        
-        # Apply distance weighting
         coe = self.omega(dist)
-        
-        # Get normalized direction vector
-        norm_vec = (pos_i - pos_j) / (torch.norm(pos_i - pos_j, dim=-1, keepdim=True) + 1e-8)
-        
+        norm_vec = (pos_i - pos_j) / (torch.norm(pos_i - pos_j, dim=-1, keepdim=True)+1e-8)
         return norm_vec * coe * mes_1, norm_vec * coe * mes_2
 
-class GridificationLayer(nn.Module):
-    """
-    Layer for mapping point cloud to grid with orientation-aware projection
-    """
-    def __init__(self, node_features, hidden_features):
+class MPNNLayer(nn.Module):
+    """ Message Passing Layer """
+    def __init__(self, edge_features=6, hidden_features=128, act=nn.SiLU):
         super().__init__()
-        self.node_model = nn.Sequential(
-            nn.Linear(node_features, hidden_features),
-            nn.SiLU(),
-            nn.Linear(hidden_features, hidden_features)
-        )
+        self.edge_model = nn.Sequential(nn.Linear(edge_features, hidden_features),
+                                        act(),
+                                        nn.Linear(hidden_features, hidden_features))
         
-        self.edge_model = nn.Sequential(
-            nn.Linear(6, hidden_features),  # 3D coordinates of both points
-            nn.SiLU(),
-            nn.Linear(hidden_features, hidden_features)
-        )
+        self.message_model = nn.Sequential(nn.Linear(hidden_features*2, hidden_features),
+                                           act(),
+                                           nn.Linear(hidden_features, hidden_features))
+
+        self.update_net =  nn.Sequential(nn.Linear(hidden_features, hidden_features),
+                                           act(),
+                                           nn.Linear(hidden_features, hidden_features))
         
-        self.message_model = nn.Sequential(
-            nn.Linear(2*hidden_features, hidden_features),
-            nn.SiLU(),
-            nn.Linear(hidden_features, hidden_features)
-        )
-        
-        self.update_model = nn.Sequential(
-            nn.Linear(hidden_features, hidden_features),
-            nn.SiLU(),
-            nn.Linear(hidden_features, hidden_features)
-        )
-        
-    def forward(self, node_features, node_pos, grid_pos, edge_index, orientations):
-        """
-        Map point cloud to grid using orientations for projection
-        
-        Args:
-            node_features: Point cloud features [N, F]
-            node_pos: Point cloud positions [N, 3]
-            grid_pos: Grid positions [G, 3]
-            edge_index: Edge indices between point cloud and grid [2, E]
-            orientations: Orientation matrices for each point [N, 3, 3]
-        """
-        # Debug info
-        # print(f"GridLayer.forward - shapes: nodes={node_pos.shape}, grid={grid_pos.shape}, edge_index={edge_index.shape}")
-        # print(f"GridLayer.forward - edge_index min: {edge_index.min().item()}, max: {edge_index.max().item()}")
-        
-        # Check for invalid indices and filter them out
-        max_node_index = node_pos.size(0) - 1
-        max_grid_index = grid_pos.size(0) - 1
-        
-        invalid_source = (edge_index[0] < 0) | (edge_index[0] > max_node_index)
-        invalid_target = (edge_index[1] < 0) | (edge_index[1] > max_grid_index)
-        
-        if invalid_source.any() or invalid_target.any():
-            # print(f"WARNING: edge_index contains {invalid_source.sum().item()} invalid source indices and "
-            #     f"{invalid_target.sum().item()} invalid target indices")
-            valid_mask = ~(invalid_source | invalid_target)
-            edge_index = edge_index[:, valid_mask]
-        
-        # Process node features
-        node_features = self.node_model(node_features)
-        
-        # Generate messages using orientation-aware projection
-        messages = self.message(node_features, node_pos, grid_pos, edge_index, orientations)
-        
-        # Update grid features
-        grid_features = self.update(messages, edge_index[1], grid_pos.size(0))
-        
-        return grid_features
-        
-    def message(self, node_features, node_pos, grid_pos, edge_index, orientations):
-        """Generate messages between point cloud and grid with orientation-aware projection"""
-        source, target = edge_index
-        
-        # Get positions of connected points
-        pos_source = node_pos[source]
-        pos_target = grid_pos[target]
-        
-        # Transform relative positions using point orientations
-        rel_pos = pos_target - pos_source
-        
-        # Apply orientations to decouple from global rotation
-        # [E, 3] @ [E, 3, 3] -> [E, 3]
-        # For each edge, we transform the relative position using the orientation of the source point
-        transformed_rel_pos = torch.bmm(rel_pos.unsqueeze(1), orientations[source]).squeeze(1)
-        
-        # Create edge features from positions
-        edge_attr = torch.cat([pos_source, transformed_rel_pos], dim=-1)
-        edge_features = self.edge_model(edge_attr)
-        
-        # Combine with node features
-        node_features_source = node_features[source]
-        message_input = torch.cat([node_features_source, edge_features], dim=-1)
-        
-        # Generate message
-        message = self.message_model(message_input)
-        
+    def forward(self, node_embedding, node_pos, grid_pos, edge_index):
+        message = self.message(node_embedding, node_pos, grid_pos, edge_index)
+        x = self.update(message, edge_index[1])
+        return x
+
+    def message(self, node_embedding, node_pos, grid_pos, edge_index):
+        index_i, index_j = edge_index[0], edge_index[1]
+        pos_nodes, pos_grids = node_pos[index_i], grid_pos[index_j]
+        edge_attr = torch.cat((pos_nodes, pos_grids), dim=-1)
+        pos_embedding = self.edge_model(edge_attr)
+        node_embedding = node_embedding[index_i]
+        message = torch.cat((node_embedding, pos_embedding), dim=-1)
+        message = self.message_model(message)
         return message
-        
-    def update(self, messages, target_indices, num_grid_points):
-        """Update grid features based on messages"""
-        # Debug info
-        # print(f"Update method - target_indices shape: {target_indices.shape}")
-        # print(f"Update method - target_indices min: {target_indices.min().item() if target_indices.numel() > 0 else 'empty'}, "
-        #     f"max: {target_indices.max().item() if target_indices.numel() > 0 else 'empty'}")
-        # print(f"Update method - num_grid_points: {num_grid_points}")
-        
-        # Check for invalid indices and filter them out
-        valid_mask = (target_indices >= 0) & (target_indices < num_grid_points)
-        invalid_count = (~valid_mask).sum().item()
-        
-        if invalid_count > 0:
-            # print(f"WARNING: Found {invalid_count} invalid indices in target_indices")
-            # Filter out invalid indices
-            messages = messages[valid_mask]
-            target_indices = target_indices[valid_mask]
-            # print(f"After filtering - target_indices shape: {target_indices.shape}")
-        
-        # Count messages per grid point for normalization
-        try:
-            num_messages = torch.bincount(target_indices, minlength=num_grid_points).to(messages.device)
-        except RuntimeError as e:
-            # print(f"Error in bincount: {str(e)}")
-            # print(f"target_indices dtype: {target_indices.dtype}")
-            # print(f"target_indices unique values: {torch.unique(target_indices).tolist()}")
-            raise e
-        
-        num_messages = torch.clamp(num_messages, min=1).unsqueeze(-1)
-        
-        # Aggregate messages for each grid point
-        grid_features = scatter_add(messages, target_indices, dim=0, dim_size=num_grid_points)
-        
-        # Normalize by number of messages
-        grid_features = grid_features / num_messages
-        
-        # Apply update network
-        grid_features = self.update_model(grid_features)
-        
-        return grid_features
+
+    def update(self, message, index_j):
+        """ Update node features """
+        num_messages = torch.bincount(index_j)
+        message = global_add_pool(message, index_j) / num_messages.unsqueeze(-1)
+        update = self.update_net(message)
+
+        return update
 
 class Block(nn.Module):
     def __init__(self, in_channel, out_channel, stride=1):
         super(Block, self).__init__()
         self.left = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, bias=False),
             nn.BatchNorm3d(out_channel),
             nn.ReLU(inplace=True),
-            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, bias=False),
             nn.BatchNorm3d(out_channel)
         )
         self.shortcut = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=1, stride=stride, bias=False),
+            nn.Conv3d(in_channel, out_channel, kernel_size=5, stride=stride, bias=False),
             nn.BatchNorm3d(out_channel)
         )
 
@@ -248,7 +110,7 @@ class Block(nn.Module):
         return out
 
 class ResNet3D(nn.Module):
-    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 128):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256):
         super(ResNet3D, self).__init__()
 
         self.instance_norm1 = nn.BatchNorm3d(in_channels)
@@ -256,11 +118,10 @@ class ResNet3D(nn.Module):
         self.in_channels = in_channels
 
         self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=2)
+        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=1)
+        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=1)
 
         self.softmax = nn.functional.softmax
-        self.avgpool = nn.AdaptiveAvgPool3d(1)
         self.fc = nn.Linear(in_channels * 4, num_classes)
 
     def _make_layer(self, block, channels, num_blocks, stride):
@@ -272,114 +133,99 @@ class ResNet3D(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.instance_norm1(x)  # Normalize input
+        x = self.instance_norm1(x)  # (bs, 128, 15, 15, 15)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        
-        return x
+        x1 = self.layer1(x)  # (bs, 128, 11, 11, 11)
+        x2 = self.layer2(x1)  # (bs, 256, 7, 7, 7 )
+        x3 = self.layer3(x2) # (bs, 512, 3, 3, 3)
+        x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
+        out = x_out.squeeze()
+        out = self.fc(out)
+        return out
 
-class EquivariantGridModel(nn.Module):
-    """
-    Full model combining equivariant learning, gridification, and 3D CNN
-    for residue identity prediction.
-    """
-    def __init__(self, 
-                 in_node_nf=9,  # Number of atom types
-                 hidden_nf=128, 
-                 out_node_nf=20,  # Number of amino acid types
-                 grid_size=9,
-                 device='cuda'):
+class ProteinGrid(nn.Module):
+    def __init__(self, node_types=4, res_types=21, on_bb=2, hidden_features=128, out_features=20, act=nn.SiLU):
         super().__init__()
-        self.hidden_nf = hidden_nf
-        self.grid_size = grid_size
-        self.device = device
-        
-        # Initial node embedding
-        self.atom_embedding = nn.Embedding(in_node_nf, hidden_nf)
-        
-        # Equivariant orientation learning
-        self.equivariant_layer = EquivariantLayer(hidden_nf, hidden_nf)
-        
-        # Gridification layer
-        self.gridification = GridificationLayer(hidden_nf, hidden_nf)
-        
-        # 3D CNN for grid processing using ResNet3D
-        self.grid_cnn = ResNet3D(
-            block=Block, 
-            layers=[2, 2, 2],
-            in_channels=hidden_nf,
-            num_classes=out_node_nf
+        self.atom_embedding = nn.Embedding(node_types, node_types)
+        self.res_embedding = nn.Embedding(res_types, res_types)
+        self.on_bb_embedding = nn.Embedding(on_bb, on_bb)
+        self.feature_embedding = nn.Sequential(
+            nn.Linear(node_types + res_types + on_bb + 3 + 2, hidden_features),
+            act(),
+            nn.Linear(hidden_features, hidden_features),
         )
         
-    def forward(self, atoms, x, edge_index, data):
-        """
-        Forward pass
-        
-        Args:
-            atoms: Atom types [N]
-            x: Atom coordinates [N, 3]
-            edge_index: Edge indices [2, E]
-            data: Additional data including grid information
-        """
-        batch_size = data.ptr.size(0) - 1
-        
-        # Debug info
-        # print(f"Model.forward - Batch size: {batch_size}")
-        # print(f"Model.forward - x shape: {x.shape}, grid_coords: {data.grid_coords.shape}")
-        # print(f"Model.forward - edge_index: {edge_index.shape}, grid_edge_index: {data.grid_edge_index.shape}")
-        # print(f"Model.forward - ptr: {data.ptr}")
-        
-        # Calculate total nodes and expected grid points
-        total_nodes = x.size(0)
-        total_grid_points = data.grid_coords.size(0)
-        expected_grid_points_per_sample = self.grid_size**3
-        
-        # print(f"Model.forward - Total nodes: {total_nodes}, Total grid points: {total_grid_points}")
-        # print(f"Model.forward - Expected grid points per sample: {expected_grid_points_per_sample}")
-        # print(f"Model.forward - grid_edge_index min: {data.grid_edge_index.min().item()}, "
-        #     f"max: {data.grid_edge_index.max().item()}")
-        
-        # Embed atoms
-        h = self.atom_embedding(atoms)
-        
-        # Learn orientations
-        orientations = self.equivariant_layer(h, x, edge_index)
-        
-        # Project grid positions into local frame
-        grid_pos = data.grid_coords
-        grid_edge_index = data.grid_edge_index
-        
-        # Check if indices are valid for the batched data
-        if grid_edge_index.max() >= total_nodes or grid_edge_index.min() < 0:
-            # print(f"FIXING batch-incompatible grid_edge_index")
-            # Filter connections to keep only valid indices
-            valid_mask = (grid_edge_index[0] >= 0) & (grid_edge_index[0] < total_nodes) & \
-                        (grid_edge_index[1] >= 0) & (grid_edge_index[1] < total_grid_points)
-            grid_edge_index = grid_edge_index[:, valid_mask]
-        
-        # Apply gridification with orientation-aware projection
-        grid_features = self.gridification(h, x, grid_pos, grid_edge_index, orientations)
-        
-        # Reshape grid features for CNN processing [B, C, D, H, W]
-        try:
-            grid_features = grid_features.reshape(
-                batch_size, 
-                self.grid_size, self.grid_size, self.grid_size, 
-                self.hidden_nf
-            ).permute(0, 4, 1, 2, 3)
-        except RuntimeError as e:
-            # print(f"Error during reshape: {str(e)}")
-            # print(f"grid_features shape: {grid_features.shape}")
-            # print(f"Expected shape after reshape: [{batch_size}, {self.grid_size}, {self.grid_size}, {self.grid_size}, {self.hidden_nf}]")
-            raise e
-        
-        # Process grid with 3D CNN
-        logits = self.grid_cnn(grid_features)
-        
-        return logits
+        self.equi_layer = equivariant_layer(hidden_features)
+        self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
+
+        self.cnn_model = ResNet3D(
+            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features
+        )
+        self.hidden_features = hidden_features
+
+    def forward(self, batch):
+        batch_size = batch.ptr.shape[0] - 1
+        node_pos = batch.coords.to(torch.float32)
+        grid_pos = batch.grid_coords.to(torch.float32)
+        physical_feats = torch.stack([batch.sasa, batch.charges], dim=-1).to(torch.float32)
+        physical_feats[torch.isinf(physical_feats)] = 0
+        physical_feats[torch.isnan(physical_feats)] = 0
+        atom_types = batch.atom_types.to(torch.long)   
+        atom_on_bb = batch.atom_on_bb.to(torch.long)
+        res_types = batch.res_types.to(torch.long)
+        edge_index = batch.grid_edge_index
+        atom_embedding = self.atom_embedding(atom_types)
+        res_embedding = self.res_embedding(res_types)
+        on_bb_embedding = self.on_bb_embedding(atom_on_bb)
+        atom_feature = self.feature_embedding(
+            torch.cat((atom_embedding, res_embedding, on_bb_embedding, node_pos, physical_feats), dim=-1)
+        )
+
+        frame = self.equi_layer(atom_feature, node_pos, batch.batch)
+        grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(512)
+        grid_pos = torch.bmm(grid_pos.reshape(batch_size, batch.grid_size[0]**3, 3), frame.permute(0, 2, 1)).reshape(-1, 3)
+
+        row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=batch.batch, batch_y=grid_batch_idx)
+        row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=batch.batch)
+
+        edge_index_knn = torch.stack(
+            (torch.cat((col_1, row_2)),
+            torch.cat((row_1, col_2)))
+        )
+
+        row_1, col_1 = radius(node_pos, grid_pos, r=4, batch_x=batch.batch, batch_y=grid_batch_idx)
+        row_2, col_2 = radius(grid_pos, node_pos, r=4, batch_x=grid_batch_idx, batch_y=batch.batch)
+
+        edge_index_radius = torch.stack(
+            (torch.cat((col_1, row_2)),
+            torch.cat((row_1, col_2)))
+        )
+        edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
+
+        edge_index = torch_geometric.utils.coalesce(edge_index)
+
+        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index)
+        cnn_input = cnn_input.reshape(
+            batch_size, 
+            int(batch.grid_size[0]), int(batch.grid_size[0]), int(batch.grid_size[0]), 
+            self.hidden_features
+        ).permute(0, 4, 1, 2, 3)
+        preds = self.cnn_model(cnn_input)
+        preds = F.log_softmax(preds, dim=-1)
+        loss = F.cross_entropy(preds, batch.y, reduction='none')
+        pred_labels = torch.max(preds, dim=-1)[1]
+        acc = (pred_labels == batch.y).float()
+        backprop_loss = loss.mean()  # []
+
+        correct_counts = torch.zeros(20).to(batch.y.device)
+        correct_counts.scatter_add_(0, batch.y, (pred_labels == batch.y).float())
+        total_counts = torch.zeros(20).to(batch.y.device)
+        total_counts.scatter_add_(0, batch.y, torch.ones_like(batch.y).float())
+        acc_per_class = correct_counts / total_counts
+        log_dict = dict()
+        log_dict["loss"] = loss
+        log_dict["acc"] = acc
+        for i, acc_cls in enumerate(acc_per_class):
+            log_dict[f"acc_{i}"] = torch.ones(batch_size).to(batch.y.device)*acc_cls
+
+        return backprop_loss, log_dict
