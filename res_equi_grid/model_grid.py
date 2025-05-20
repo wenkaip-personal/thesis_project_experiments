@@ -46,10 +46,15 @@ class equivariant_layer(nn.Module):
             
             # Apply Gram-Schmidt to get the frame for this batch
             frame_b = self.gram_schmidt_batch(vec1_out, vec2_out)
-            results.append(frame_b)
+            
+            # Add this line to aggregate frames within each batch element
+            frame_b_mean = frame_b.mean(dim=0, keepdim=True)  # Shape: [1, 3, 3]
+            
+            # Change this line to append the mean frame instead of all frames
+            results.append(frame_b_mean)  # Instead of results.append(frame_b)
         
         # Stack results to maintain batch dimension
-        return torch.cat(results, dim=0)
+        return torch.cat(results, dim=0)  # Shape: [batch_size, 3, 3]
 
     def gram_schmidt_batch(self, v1, v2):
         n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
