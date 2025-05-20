@@ -21,6 +21,11 @@ class equivariant_layer(nn.Module):
         self.p = 5
 
     def forward(self, x, pos, batch):
+        # Check if batch tensor exists and has correct size
+        if batch is None or batch.size(0) != pos.size(0):
+            # Create a new batch tensor that matches the size of pos
+            batch = torch.zeros(pos.size(0), dtype=torch.long, device=pos.device)
+
         edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
         dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
         vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
