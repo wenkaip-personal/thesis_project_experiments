@@ -52,7 +52,9 @@ _amino_acids = lambda x: {
 class GridData(Data):
     def __inc__(self, key: str, value: Any, *args, **kwargs) -> Any:
         if 'grid_edge_index' in key:
-            return torch.tensor([self.grid_coords.size(0), self.coords.size(0)])
+            # Return a scalar value - the maximum number of nodes
+            # This ensures all indices will be properly incremented without overlap
+            return max(self.coords.size(0), self.grid_coords.size(0))
         else:
             return super().__inc__(key, value, *args, **kwargs)
 
