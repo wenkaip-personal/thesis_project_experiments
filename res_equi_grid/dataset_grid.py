@@ -1,6 +1,7 @@
 import os
 import torch
-from torch_geometric.data import Data, InMemoryDataset, DataLoader as PyGDataLoader
+from torch_geometric.data import Data, InMemoryDataset
+from torch_geometric.loader import DataLoader as PyGDataLoader
 import torch_geometric
 from pathlib import Path
 import json
@@ -51,7 +52,7 @@ _amino_acids = lambda x: {
 class GridData(Data):
     def __inc__(self, key: str, value: Any, *args, **kwargs) -> Any:
         if 'grid_edge_index' in key:
-            return torch.tensor([[getattr(self, f'coords').size(0)], [getattr(self, f'grid_coords').size(0)]])
+            return torch.tensor([self.coords.size(0), self.grid_coords.size(0)])
         else:
             return super().__inc__(key, value, *args, **kwargs)
 
@@ -100,7 +101,7 @@ class Protein:
         # Create evenly spaced coordinates within the given range
         coords = torch.linspace(start, end, n)
         
-        xx, yy, zz = torch.meshgrid(coords, coords, coords)
+        xx, yy, zz = torch.meshgrid(coords, coords, coords, indexing='ij')
         
         grid_coordinates = torch.stack((xx.flatten(), yy.flatten(), zz.flatten()), dim=1)
         return grid_coordinates.to(torch.float64)
@@ -169,25 +170,13 @@ class Protein:
             edge_index = torch_geometric.utils.coalesce(edge_index)
             grid_data.grid_edge_index = edge_index
             grid_data.grid_size = self.size
+
+            # Explicit node counts for atoms and grid points
+            grid_data.num_nodes = self.grid_coords.size(0) + coords.size(0)
+            grid_data.num_atoms = coords.size(0)  # Number of atoms
+            grid_data.num_grid_points = self.grid_coords.size(0)  # Number of grid points
             
             return grid_data
-            
-        # If no valid subunit was found, create a default data object
-        # This is just a fallback and should be handled better in production
-        grid_data = GridData()
-        grid_data.coords = torch.zeros((1, 3), dtype=torch.float64)
-        grid_data.grid_coords = self.grid_coords
-        grid_data.atom_types = torch.zeros(1, dtype=torch.long)
-        grid_data.res_types = torch.zeros(1, dtype=torch.long)
-        grid_data.atom_on_bb = torch.zeros(1, dtype=torch.long)
-        grid_data.sasa = torch.zeros(1, dtype=torch.float32)
-        grid_data.charges = torch.zeros(1, dtype=torch.float32)
-        grid_data.y = torch.zeros(1, dtype=torch.long)
-        grid_data.cb_index = torch.zeros(1, dtype=torch.long)
-        grid_data.grid_edge_index = torch.zeros((2, 0), dtype=torch.long)
-        grid_data.grid_size = self.size
-        
-        return grid_data
 
     def __len__(self):
         return len(self.idx)
@@ -292,7 +281,7 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.train_dataset) if distributed else None)
         shuffle = True if split == 'train' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)
+        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)
 
     def val_loader(self):
         split = "valid"
@@ -300,7 +289,7 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.valid_dataset) if distributed else None)
         shuffle = True if split == 'valid' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)     
+        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)     
 
     def test_loader(self):
         split = "test"
@@ -308,4 +297,4 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.test_dataset) if distributed else None)
         shuffle = True if split == 'test' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=24)
+        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)
