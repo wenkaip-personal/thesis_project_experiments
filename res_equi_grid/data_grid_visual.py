@@ -2,15 +2,15 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from dataset_grid import GridRESDataset
+from dataset_grid import Protein
 from torch_geometric.loader import DataLoader
 import os
 
 # Create a dataset with a small number of samples for visualization
-dataset = GridRESDataset(
-    '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/',
-    '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/train_indices.txt',
-    grid_size=9,
+dataset = Protein(
+    lmdb_path='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/',
+    split_path='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/train_indices.txt',
+    size=9,
     spacing=2.0,
     k=3,
     max_samples=10  # Limit to 10 samples for quick visualization
@@ -35,7 +35,7 @@ def visualize_sample(data, sample_idx=0):
     mask = data.batch == sample_idx
     
     # Extract atom positions and grid positions for this sample
-    atom_pos = data.x[mask].cpu().numpy()
+    atom_pos = data.coords[mask].cpu().numpy()
     
     # Get the starting index for grid points
     atom_count = mask.sum().item()
@@ -50,7 +50,7 @@ def visualize_sample(data, sample_idx=0):
     ax1.scatter(atom_pos[:, 0], atom_pos[:, 1], atom_pos[:, 2], c='blue', alpha=0.7, s=30)
     
     # Highlight CA atom
-    ca_idx = data.ca_idx[sample_idx].item()
+    ca_idx = data.cb_index[sample_idx].item()
     ca_pos = atom_pos[ca_idx]
     ax1.scatter(ca_pos[0], ca_pos[1], ca_pos[2], c='red', s=100, marker='*')
     
@@ -109,24 +109,24 @@ def visualize_sample(data, sample_idx=0):
 
 # Print statistics about the batch
 print(f"Batch size: {batch.batch.max().item() + 1}")
-print(f"Total atoms: {batch.x.shape[0]}")
+print(f"Total atoms: {batch.coords.shape[0]}")
 print(f"Grid size per sample: {batch.grid_size}x{batch.grid_size}x{batch.grid_size}")
 print(f"Total grid points: {batch.grid_coords.shape[0]}")
 print(f"Grid edge index shape: {batch.grid_edge_index.shape}")
-print(f"Labels: {batch.label}")
+print(f"Labels: {batch.y}")
 
 # Visualize the first sample
 fig1 = visualize_sample(batch, sample_idx=0)
-plt.savefig('sample_0_visualization_all_edges.png', dpi=300, bbox_inches='tight')
+plt.savefig('res_equi_grid/sample_0_visualization_all_edges.png', dpi=300, bbox_inches='tight')
 
 # Visualize the second sample
 fig2 = visualize_sample(batch, sample_idx=1)
-plt.savefig('sample_1_visualization_all_edges.png', dpi=300, bbox_inches='tight')
+plt.savefig('res_equi_grid/sample_1_visualization_all_edges.png', dpi=300, bbox_inches='tight')
 
 # Edge statistics
 edge_index = batch.grid_edge_index.cpu().numpy()
 print(f"\nEdge Statistics:")
 print(f"Total edges: {edge_index.shape[1]}")
-print(f"Average connections per atom: {edge_index.shape[1] / batch.x.shape[0]:.2f}")
+print(f"Average connections per atom: {edge_index.shape[1] / batch.coords.shape[0]:.2f}")
 print(f"Max source index: {edge_index[0].max()}")
 print(f"Max target index: {edge_index[1].max()}")

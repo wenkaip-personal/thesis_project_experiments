@@ -8,9 +8,45 @@ from torch_cluster import knn, radius
 from typing import Any
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
+from atom3d.datasets import LMDBDataset
+import numpy as np
+import random
+import math
 
-dataroot = os.environ['DATAROOT']
-dictroot =  Path(dataroot) / 'protein'
+# Element and amino acid mappings from dataset.py
+_element_mapping = lambda x: {
+    'H' : 0,
+    'C' : 1,
+    'N' : 2,
+    'O' : 3,
+    'F' : 4,
+    'S' : 5,
+    'Cl': 6, 'CL': 6,
+    'P' : 7
+}.get(x, 8)
+
+_amino_acids = lambda x: {
+    'ALA': 0,
+    'ARG': 1,
+    'ASN': 2,
+    'ASP': 3,
+    'CYS': 4,
+    'GLU': 5,
+    'GLN': 6,
+    'GLY': 7,
+    'HIS': 8,
+    'ILE': 9,
+    'LEU': 10,
+    'LYS': 11,
+    'MET': 12,
+    'PHE': 13,
+    'PRO': 14,
+    'SER': 15,
+    'THR': 16,
+    'TRP': 17,
+    'TYR': 18,
+    'VAL': 19
+}.get(x, 20)
 
 class GridData(Data):
     def __inc__(self, key: str, value: Any, *args, **kwargs) -> Any:
@@ -24,17 +60,23 @@ class GridData(Data):
             return 1
         else:
             return 0
-        
-        
+
 class Protein:
     """
-    Protein Dataset
-
+    Protein Dataset based on ATOM3D RES dataset
     """
 
-    def __init__(self, partition, radius=4.5, k=2, knn=True, size=9, spacing=8):
-        with open(str(dictroot / f'{partition}_dict.json'), 'r') as f:
-            self.dict = json.load(f)
+    def __init__(self, lmdb_path, split_path=None, radius=4.5, k=2, knn=True, size=9, spacing=8, max_samples=None):
+        self.dataset = LMDBDataset(lmdb_path)
+        
+        if split_path is not None:
+            self.idx = list(map(int, open(split_path).read().split()))
+        else:
+            self.idx = list(range(len(self.dataset)))
+            
+        if max_samples is not None:
+            self.idx = self.idx[:max_samples]
+            
         self.knn = knn
         self.radius = radius
         self.k = k
@@ -48,15 +90,14 @@ class Protein:
         
         Parameters:
         - n (int): The size of the grid along one dimension. This will create a n x n x n grid.
-        - start (float): The starting value of the range.
-        - end (float): The ending value of the range.
+        - spacing (float): Controls the range of the grid (-spacing to +spacing)
         
         Returns:
         - grid_coordinates (Tensor): The coordinates of the grid points.
         """
         start = -spacing
         end = spacing
-        # 在给定范围内创建均匀的间距坐标
+        # Create evenly spaced coordinates within the given range
         coords = torch.linspace(start, end, n)
         
         xx, yy, zz = torch.meshgrid(coords, coords, coords)
@@ -65,80 +106,140 @@ class Protein:
         return grid_coordinates.to(torch.float64)
     
     def __getitem__(self, i):
-        data_path = self.dict[str(i)]
-        coords_path = Path(data_path).parent.parent / "atom_coords.pt"
-        data = torch.load(data_path)
-        coords = torch.load(str(coords_path))[data.node_sub_index]
-        cb_coords = coords[data.cb_index]
-        coords = coords - cb_coords
-        coords = coords@data.rot.T
-        data.coords = coords.to(torch.float64)
+        data = self.dataset[self.idx[i]]
+        atoms = data['atoms']
+        
+        # Process for one subunit in data['labels']
+        # We're selecting the first valid subunit for simplicity
+        for sub in data['labels'].itertuples():
+            _, num, aa = sub.subunit.split('_')
+            num, aa = int(num), _amino_acids(aa)
+            if aa == 20: continue  # Skip unknown amino acids
+            
+            # Get atoms for this subunit
+            my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
+            ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
+            if len(ca_idx) != 1: continue
+            
+            # Create a Data object to store the protein information
+            grid_data = GridData()
+            
+            # Extract coordinates and prepare them for the grid
+            coords = torch.tensor(my_atoms[['x', 'y', 'z']].values, dtype=torch.float64)
+            ca_coord = coords[int(ca_idx)]
+            coords = coords - ca_coord  # Center at CA
+            
+            # Get atom features
+            atom_types = torch.tensor([_element_mapping(e) for e in my_atoms.element], dtype=torch.long)
+            res_types = torch.tensor([_amino_acids(r) for r in my_atoms.resname], dtype=torch.long)
+            atom_on_bb = torch.tensor([(n in ['N', 'CA', 'C', 'O']) for n in my_atoms.name], dtype=torch.long)
+            
+            # Physical features (placeholder values, replace with actual values if available)
+            sasa = torch.zeros(len(my_atoms), dtype=torch.float32)
+            charges = torch.zeros(len(my_atoms), dtype=torch.float32)
+            
+            # Add to grid data
+            grid_data.coords = coords
+            grid_data.grid_coords = self.grid_coords
+            grid_data.atom_types = atom_types
+            grid_data.res_types = res_types
+            grid_data.atom_on_bb = atom_on_bb
+            grid_data.sasa = sasa
+            grid_data.charges = charges
+            grid_data.y = torch.tensor(aa, dtype=torch.long)  # Target label
+            grid_data.cb_index = torch.tensor(int(ca_idx), dtype=torch.long)  # CA index
+            
+            # Create edges between atoms and grid points
+            row_1, col_1 = knn(coords, self.grid_coords, k=self.k)
+            row_2, col_2 = knn(self.grid_coords, coords, k=self.k)
 
-        data.grid_coords = self.grid_coords
-        row_1, col_1 = knn(data.coords, self.grid_coords, k=self.k)
-        row_2, col_2 = knn(self.grid_coords, data.coords, k=self.k)
+            edge_index_knn = torch.stack(
+                (torch.cat((col_1, row_2)),
+                torch.cat((row_1, col_2)))
+            )
 
-        edge_index_knn = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
-        )
+            row_1, col_1 = radius(coords, self.grid_coords, r=4)
+            row_2, col_2 = radius(self.grid_coords, coords, r=4)
+            edge_index_radius = torch.stack(
+                (torch.cat((col_1, row_2)),
+                torch.cat((row_1, col_2)))
+            )
+            edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
 
-        row_1, col_1 = radius(data.coords, self.grid_coords, r=4)
-        row_2, col_2 = radius(self.grid_coords, data.coords, r=4)
-        edge_index_radius = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
-        )
-        edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
-
-        edge_index = torch_geometric.utils.coalesce(edge_index)
-        data.grid_edge_index = edge_index
+            edge_index = torch_geometric.utils.coalesce(edge_index)
+            grid_data.grid_edge_index = edge_index
+            grid_data.grid_size = self.size
+            
+            return grid_data
+            
+        # If no valid subunit was found, create a default data object
+        # This is just a fallback and should be handled better in production
         grid_data = GridData()
-        grid_data = grid_data.from_dict(data.to_dict())
+        grid_data.coords = torch.zeros((1, 3), dtype=torch.float64)
+        grid_data.grid_coords = self.grid_coords
+        grid_data.atom_types = torch.zeros(1, dtype=torch.long)
+        grid_data.res_types = torch.zeros(1, dtype=torch.long)
+        grid_data.atom_on_bb = torch.zeros(1, dtype=torch.long)
+        grid_data.sasa = torch.zeros(1, dtype=torch.float32)
+        grid_data.charges = torch.zeros(1, dtype=torch.float32)
+        grid_data.y = torch.zeros(1, dtype=torch.long)
+        grid_data.cb_index = torch.zeros(1, dtype=torch.long)
+        grid_data.grid_edge_index = torch.zeros((2, 0), dtype=torch.long)
         grid_data.grid_size = self.size
-        grid_data.res_types[data.cb_index] = 20
+        
         return grid_data
 
     def __len__(self):
-        return len(self.dict)
+        return len(self.idx)
 
 class ProteinInMemoryDataset(InMemoryDataset):
     def __init__(
         self,
-        root=os.environ['DATAROOT'],
+        root,
         transform=None,
         pre_transform=None,
         pre_filter=None,
-        partition="train",
+        lmdb_path=None,
+        split_path=None,
         radius=2,
         k=2,
         knn=True,
         size=9,
         spacing=8
     ):
-        self.partition = partition
-        self.k=k
-        self.knn=knn
-        self.size=size
-        self.spacing=spacing
+        self.lmdb_path = lmdb_path
+        self.split_path = split_path
+        self.k = k
+        self.knn = knn
+        self.size = size
+        self.spacing = spacing
         self.radius = radius
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
     @property
     def processed_file_names(self):
-        return [f"{self.partition}_data.pt"]
+        return ["data.pt"]
 
     def process(self):
         self.dataset = Protein(
-            partition=self.partition, radius=self.radius, k=self.k, 
-            knn=self.knn, size=self.size, 
+            lmdb_path=self.lmdb_path, 
+            split_path=self.split_path,
+            radius=self.radius, 
+            k=self.k, 
+            knn=self.knn, 
+            size=self.size, 
             spacing=self.spacing
         )
         # Read data into huge `Data` list.
         data_list = []
-        for graph in tqdm(self.dataset, total=self.dataset.__len__()):
-            data_list.append(graph)
+        for i in tqdm(range(len(self.dataset)), total=self.dataset.__len__()):
+            try:
+                graph = self.dataset[i]
+                data_list.append(graph)
+            except Exception as e:
+                print(f"Error processing item {i}: {e}")
+                continue
 
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
@@ -150,33 +251,39 @@ class ProteinInMemoryDataset(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 
 class ProteinDataset:
-    def __init__(self, batch_size=100, knn=True, radius=2, k=3, size=9, spacing=8):
+    def __init__(self, lmdb_path, split_path_root, batch_size=100, knn=True, radius=2, k=3, size=9, spacing=8, max_samples=None):
         torch_geometric.seed.seed_everything(0)
         self.batch_size = batch_size
  
         self.train_dataset = Protein(
-            partition='train',
+            lmdb_path=lmdb_path,
+            split_path=f"{split_path_root}/train_indices.txt",
             knn=knn,
             radius=radius,
             k=k,
             size=size,
-            spacing=spacing
+            spacing=spacing,
+            max_samples=max_samples
         )
         self.test_dataset = Protein(
-            partition='test',
+            lmdb_path=lmdb_path,
+            split_path=f"{split_path_root}/test_indices.txt",
             knn=knn,
             radius=radius,
             k=k,
             size=size,
-            spacing=spacing
+            spacing=spacing,
+            max_samples=max_samples
         )
         self.valid_dataset = Protein(
-            partition='val',
+            lmdb_path=lmdb_path,
+            split_path=f"{split_path_root}/val_indices.txt",
             knn=knn,
             radius=radius,
             k=k,
             size=size,
-            spacing=spacing
+            spacing=spacing,
+            max_samples=max_samples
         )
     
     def train_loader(self):
