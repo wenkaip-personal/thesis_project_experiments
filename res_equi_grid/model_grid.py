@@ -26,13 +26,30 @@ class equivariant_layer(nn.Module):
             # Create a new batch tensor that matches the size of pos
             batch = torch.zeros(pos.size(0), dtype=torch.long, device=pos.device)
 
-        edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
-        dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
-        vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
-        vec1_out, vec2_out = global_add_pool(vec1, edge_index[0]), global_add_pool(vec2, edge_index[0])
-        vec1_out = global_mean_pool(vec1_out, batch)
-        vec2_out = global_mean_pool(vec2_out, batch)
-        return self.gram_schmidt_batch(vec1_out, vec2_out)
+        # Create a batch tensor for each individual item in the batch
+        unique_batches = torch.unique(batch)
+        batch_size = unique_batches.size(0)
+        
+        # Process each batch separately to maintain batch dimension
+        results = []
+        for b in unique_batches:
+            mask = (batch == b)
+            pos_b = pos[mask]
+            x_b = x[mask]
+            batch_b = torch.zeros_like(pos_b[:, 0], dtype=torch.long)
+            
+            edge_index = radius_graph(pos_b, r=4.5, batch=batch_b, loop=True)
+            dist = (pos_b[edge_index[0]] - pos_b[edge_index[1]]).norm(dim=-1, keepdim=True)
+            vec1, vec2 = self.message(x_b[edge_index[0]], x_b[edge_index[1]], dist, pos_b[edge_index[0]], pos_b[edge_index[1]])
+            vec1_out = global_add_pool(vec1, edge_index[0])
+            vec2_out = global_add_pool(vec2, edge_index[0])
+            
+            # Apply Gram-Schmidt to get the frame for this batch
+            frame_b = self.gram_schmidt_batch(vec1_out, vec2_out)
+            results.append(frame_b)
+        
+        # Stack results to maintain batch dimension
+        return torch.cat(results, dim=0)
 
     def gram_schmidt_batch(self, v1, v2):
         n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
@@ -187,7 +204,7 @@ class ProteinGrid(nn.Module):
         )
 
         frame = self.equi_layer(atom_feature, node_pos, batch.batch)
-        grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(512)
+        grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(batch.grid_size[0]**3)
         grid_pos = torch.bmm(grid_pos.reshape(batch_size, batch.grid_size[0]**3, 3), frame.permute(0, 2, 1)).reshape(-1, 3)
 
         row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=batch.batch, batch_y=grid_batch_idx)
