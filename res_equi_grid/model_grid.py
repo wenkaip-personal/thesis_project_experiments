@@ -198,7 +198,8 @@ class ProteinGrid(nn.Module):
         )
 
         # Compute equivariant frames for each atom
-        equi_frames = self.equi_layer(atom_feature, node_pos, batch.batch)
+        atom_batch = batch.batch[:node_pos.size(0)]  # Get batch assignments for atoms only
+        equi_frames = self.equi_layer(atom_feature, node_pos, atom_batch)
         
         # Use equivariant frames in the MPNN layer
         cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index, equi_frames, batch.batch)
