@@ -202,7 +202,7 @@ class ProteinGrid(nn.Module):
         equi_frames = self.equi_layer(atom_feature, node_pos, atom_batch)
         
         # Use equivariant frames in the MPNN layer
-        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index, equi_frames, batch.batch)
+        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index, equi_frames, atom_batch)
         
         cnn_input = cnn_input.reshape(
             batch_size, 
