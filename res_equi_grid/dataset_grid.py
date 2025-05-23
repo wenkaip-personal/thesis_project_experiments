@@ -177,6 +177,7 @@ class Protein:
             grid_data.num_nodes = self.grid_coords.size(0) + coords.size(0)
             grid_data.num_atoms = coords.size(0)  # Number of atoms
             grid_data.num_grid_points = self.grid_coords.size(0)  # Number of grid points
+            grid_data.is_atom_mask = torch.cat((torch.ones(coords.size(0)), torch.zeros(self.grid_coords.size(0))))
             
             return grid_data
 
@@ -283,7 +284,7 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.train_dataset) if distributed else None)
         shuffle = True if split == 'train' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)
+        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)
 
     def val_loader(self):
         split = "valid"
@@ -291,7 +292,7 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.valid_dataset) if distributed else None)
         shuffle = True if split == 'valid' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)     
+        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)     
 
     def test_loader(self):
         split = "test"
@@ -299,4 +300,4 @@ class ProteinDataset:
         sampler = (DistributedSampler(self.test_dataset) if distributed else None)
         shuffle = True if split == 'test' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=12)
+        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)
