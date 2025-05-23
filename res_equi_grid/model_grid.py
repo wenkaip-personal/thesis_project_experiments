@@ -204,16 +204,16 @@ class ProteinGrid(nn.Module):
         # Apply frame transformation
         grid_pos = torch.bmm(grid_pos_batched, frame.permute(0, 2, 1)).reshape(-1, 3)
 
-        row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=batch.batch, batch_y=grid_batch_idx)
-        row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=batch.batch)
+        row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=atom_batch, batch_y=grid_batch_idx)
+        row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=atom_batch)
 
         edge_index_knn = torch.stack(
             (torch.cat((col_1, row_2)),
             torch.cat((row_1, col_2)))
         )
 
-        row_1, col_1 = radius(node_pos, grid_pos, r=4, batch_x=batch.batch, batch_y=grid_batch_idx)
-        row_2, col_2 = radius(grid_pos, node_pos, r=4, batch_x=grid_batch_idx, batch_y=batch.batch)
+        row_1, col_1 = radius(node_pos, grid_pos, r=4, batch_x=atom_batch, batch_y=grid_batch_idx)
+        row_2, col_2 = radius(grid_pos, node_pos, r=4, batch_x=grid_batch_idx, batch_y=atom_batch)
 
         edge_index_radius = torch.stack(
             (torch.cat((col_1, row_2)),
