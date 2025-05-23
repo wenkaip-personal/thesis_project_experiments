@@ -48,11 +48,11 @@ class equivariant_layer(nn.Module):
         norm_vec = (pos_i - pos_j) / (torch.norm(pos_i - pos_j, dim=-1, keepdim=True)+1e-8)
         return norm_vec * coe * mes_1, norm_vec * coe * mes_2
 
-class EquivariantMPNNLayer(nn.Module):
-    """ Equivariant Message Passing Layer """
+class MPNNLayer(nn.Module):
+    """ Message Passing Layer """
     def __init__(self, edge_features=6, hidden_features=128, act=nn.SiLU):
         super().__init__()
-        self.edge_model = nn.Sequential(nn.Linear(3, hidden_features),  # Just the relative position in local frame
+        self.edge_model = nn.Sequential(nn.Linear(edge_features, hidden_features),
                                         act(),
                                         nn.Linear(hidden_features, hidden_features))
         
@@ -60,39 +60,22 @@ class EquivariantMPNNLayer(nn.Module):
                                            act(),
                                            nn.Linear(hidden_features, hidden_features))
 
-        self.update_net = nn.Sequential(nn.Linear(hidden_features, hidden_features),
-                                        act(),
-                                        nn.Linear(hidden_features, hidden_features))
+        self.update_net =  nn.Sequential(nn.Linear(hidden_features, hidden_features),
+                                           act(),
+                                           nn.Linear(hidden_features, hidden_features))
         
-    def forward(self, node_embedding, node_pos, grid_pos, edge_index, equi_frames, batch):
-        message = self.message(node_embedding, node_pos, grid_pos, edge_index, equi_frames, batch)
+    def forward(self, node_embedding, node_pos, grid_pos, edge_index):
+        message = self.message(node_embedding, node_pos, grid_pos, edge_index)
         x = self.update(message, edge_index[1])
         return x
 
-    def message(self, node_embedding, node_pos, grid_pos, edge_index, equi_frames, batch):
+    def message(self, node_embedding, node_pos, grid_pos, edge_index):
         index_i, index_j = edge_index[0], edge_index[1]
-        
-        # Get source atom positions and target grid positions
-        pos_nodes, pos_grids = node_pos[index_i], grid_pos[index_j - node_pos.shape[0]]
-        
-        # Get equivariant frames for source atoms
-        frames = equi_frames[batch[index_i]]
-        
-        # Compute relative positions in local frame (this is the key equivariant step)
-        rel_pos = pos_grids - pos_nodes
-        
-        # Project relative positions to local frames
-        # frames has shape [batch_size, 3, 3] (3 basis vectors)
-        # rel_pos has shape [num_edges, 3]
-        # Need to batch-wise multiply for correct projection
-        local_rel_pos = torch.bmm(frames, rel_pos.unsqueeze(-1)).squeeze(-1)
-        
-        # Process edge attributes
-        pos_embedding = self.edge_model(local_rel_pos)
-        node_embedding_i = node_embedding[index_i]
-        
-        # Combine node and position embeddings
-        message = torch.cat((node_embedding_i, pos_embedding), dim=-1)
+        pos_nodes, pos_grids = node_pos[index_i], grid_pos[index_j]
+        edge_attr = torch.cat((pos_nodes, pos_grids), dim=-1)
+        pos_embedding = self.edge_model(edge_attr)
+        node_embedding = node_embedding[index_i]
+        message = torch.cat((node_embedding, pos_embedding), dim=-1)
         message = self.message_model(message)
         return message
 
@@ -101,6 +84,7 @@ class EquivariantMPNNLayer(nn.Module):
         num_messages = torch.bincount(index_j)
         message = global_add_pool(message, index_j) / num_messages.unsqueeze(-1)
         update = self.update_net(message)
+
         return update
 
 class Block(nn.Module):
@@ -172,7 +156,7 @@ class ProteinGrid(nn.Module):
         )
         
         self.equi_layer = equivariant_layer(hidden_features)
-        self.mpnn_layer = EquivariantMPNNLayer(hidden_features=hidden_features, act=act)
+        self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
 
         self.cnn_model = ResNet3D(
             block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features
@@ -197,13 +181,30 @@ class ProteinGrid(nn.Module):
             torch.cat((atom_embedding, res_embedding, on_bb_embedding, node_pos, physical_feats), dim=-1)
         )
 
-        # Compute equivariant frames for each atom
-        atom_batch = batch.batch[:node_pos.size(0)]  # Get batch assignments for atoms only
-        equi_frames = self.equi_layer(atom_feature, node_pos, atom_batch)
-        
-        # Use equivariant frames in the MPNN layer
-        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index, equi_frames, atom_batch)
-        
+        frame = self.equi_layer(atom_feature, node_pos, batch.batch)
+        grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(512)
+        grid_pos = torch.bmm(grid_pos.reshape(batch_size, batch.grid_size[0]**3, 3), frame.permute(0, 2, 1)).reshape(-1, 3)
+
+        row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=batch.batch, batch_y=grid_batch_idx)
+        row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=batch.batch)
+
+        edge_index_knn = torch.stack(
+            (torch.cat((col_1, row_2)),
+            torch.cat((row_1, col_2)))
+        )
+
+        row_1, col_1 = radius(node_pos, grid_pos, r=4, batch_x=batch.batch, batch_y=grid_batch_idx)
+        row_2, col_2 = radius(grid_pos, node_pos, r=4, batch_x=grid_batch_idx, batch_y=batch.batch)
+
+        edge_index_radius = torch.stack(
+            (torch.cat((col_1, row_2)),
+            torch.cat((row_1, col_2)))
+        )
+        edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
+
+        edge_index = torch_geometric.utils.coalesce(edge_index)
+
+        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index)
         cnn_input = cnn_input.reshape(
             batch_size, 
             int(batch.grid_size[0]), int(batch.grid_size[0]), int(batch.grid_size[0]), 
