@@ -184,11 +184,14 @@ class ProteinGrid(nn.Module):
         atom_batch = batch.batch[:node_pos.size(0)]  # Get batch assignments for atoms only
         frame = self.equi_layer(atom_feature, node_pos, atom_batch)
 
+        # Use the actual batch size from the frame tensor
+        atom_batch_size = frame.shape[0]
+
         # Get the number of grid points per sample
         grid_points_per_sample = batch.grid_size[0]**3
         
         # Create batch indices for grid points
-        grid_batch_idx = torch.arange(batch_size, device=grid_pos.device).repeat_interleave(grid_points_per_sample)
+        grid_batch_idx = torch.arange(atom_batch_size, device=grid_pos.device).repeat_interleave(grid_points_per_sample)
         
         # Since grid_pos contains concatenated grid coordinates from all samples,
         # we need to select the appropriate grid coordinates for transformation
@@ -196,7 +199,7 @@ class ProteinGrid(nn.Module):
         grid_coords_single = grid_pos[:grid_points_per_sample]
         
         # Repeat grid coordinates for each sample in the batch
-        grid_pos_batched = grid_coords_single.unsqueeze(0).repeat(batch_size, 1, 1)
+        grid_pos_batched = grid_coords_single.unsqueeze(0).repeat(atom_batch_size, 1, 1)
         
         # Apply frame transformation
         grid_pos = torch.bmm(grid_pos_batched, frame.permute(0, 2, 1)).reshape(-1, 3)
