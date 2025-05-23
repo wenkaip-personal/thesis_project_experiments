@@ -184,9 +184,6 @@ class ProteinGrid(nn.Module):
         atom_batch = batch.batch[:node_pos.size(0)]  # Get batch assignments for atoms only
         frame = self.equi_layer(atom_feature, node_pos, atom_batch)
 
-        # Use the actual batch size from the frame tensor
-        batch_size = frame.shape[0]
-
         # Get the number of grid points per sample
         grid_points_per_sample = batch.grid_size[0]**3
         
