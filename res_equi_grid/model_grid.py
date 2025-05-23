@@ -181,7 +181,8 @@ class ProteinGrid(nn.Module):
             torch.cat((atom_embedding, res_embedding, on_bb_embedding, node_pos, physical_feats), dim=-1)
         )
 
-        frame = self.equi_layer(atom_feature, node_pos, batch.batch)
+        atom_batch = batch.batch[:node_pos.size(0)]  # Get batch assignments for atoms only
+        frame = self.equi_layer(atom_feature, node_pos, atom_batch)
         grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(512)
         grid_pos = torch.bmm(grid_pos.reshape(batch_size, batch.grid_size[0]**3, 3), frame.permute(0, 2, 1)).reshape(-1, 3)
 
