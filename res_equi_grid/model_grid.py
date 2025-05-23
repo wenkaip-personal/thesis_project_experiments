@@ -91,14 +91,14 @@ class Block(nn.Module):
     def __init__(self, in_channel, out_channel, stride=1):
         super(Block, self).__init__()
         self.left = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, bias=False),
+            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, padding=1, bias=False),
             nn.BatchNorm3d(out_channel),
             nn.ReLU(inplace=True),
-            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, bias=False),
+            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm3d(out_channel)
         )
         self.shortcut = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=5, stride=stride, bias=False),
+            nn.Conv3d(in_channel, out_channel, kernel_size=5, stride=stride, padding=2, bias=False),
             nn.BatchNorm3d(out_channel)
         )
 
