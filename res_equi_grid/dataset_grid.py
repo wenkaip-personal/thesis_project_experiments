@@ -77,6 +77,9 @@ class Protein:
         else:
             self.idx = list(range(len(self.dataset)))
             
+        # Filter out invalid samples
+        self.idx = self._filter_valid_samples(self.idx)
+        
         if max_samples is not None:
             self.idx = self.idx[:max_samples]
             
@@ -86,6 +89,38 @@ class Protein:
         self.grid_coords = self.generate_grid(n=size, spacing=spacing)
         self.size = size
         self.radius_table = torch.tensor([1.7, 1.45, 1.37, 1.7])
+        
+        print(f"Loaded {len(self.idx)} valid samples from dataset")
+
+    def _filter_valid_samples(self, indices):
+        """Filter out samples that don't have valid subunits"""
+        valid_indices = []
+        
+        for idx in tqdm(indices, desc="Filtering valid samples"):
+            if self._is_valid_sample(idx):
+                valid_indices.append(idx)
+        
+        return valid_indices
+    
+    def _is_valid_sample(self, idx):
+        """Check if a sample has at least one valid subunit"""
+        try:
+            data = self.dataset[idx]
+            atoms = data['atoms']
+            
+            for sub in data['labels'].itertuples():
+                _, num, aa = sub.subunit.split('_')
+                num, aa = int(num), _amino_acids(aa)
+                if aa == 20: continue  # Skip unknown amino acids
+                
+                my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
+                ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
+                if len(ca_idx) == 1:
+                    return True
+            
+            return False
+        except Exception:
+            return False
 
     def generate_grid(self, n, spacing=1):
         """
