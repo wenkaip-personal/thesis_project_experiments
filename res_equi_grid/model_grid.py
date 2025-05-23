@@ -187,8 +187,22 @@ class ProteinGrid(nn.Module):
         # Use the actual batch size from the frame tensor
         batch_size = frame.shape[0]
 
-        grid_batch_idx = torch.arange(batch_size, device="cuda").repeat_interleave(batch.grid_size[0]**3)
-        grid_pos = torch.bmm(grid_pos.reshape(batch_size, batch.grid_size[0]**3, 3), frame.permute(0, 2, 1)).reshape(-1, 3)
+        # Get the number of grid points per sample
+        grid_points_per_sample = batch.grid_size[0]**3
+        
+        # Create batch indices for grid points
+        grid_batch_idx = torch.arange(batch_size, device=grid_pos.device).repeat_interleave(grid_points_per_sample)
+        
+        # Since grid_pos contains concatenated grid coordinates from all samples,
+        # we need to select the appropriate grid coordinates for transformation
+        # The first grid_points_per_sample points are the actual grid coordinates
+        grid_coords_single = grid_pos[:grid_points_per_sample]
+        
+        # Repeat grid coordinates for each sample in the batch
+        grid_pos_batched = grid_coords_single.unsqueeze(0).repeat(batch_size, 1, 1)
+        
+        # Apply frame transformation
+        grid_pos = torch.bmm(grid_pos_batched, frame.permute(0, 2, 1)).reshape(-1, 3)
 
         row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=batch.batch, batch_y=grid_batch_idx)
         row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=batch.batch)
