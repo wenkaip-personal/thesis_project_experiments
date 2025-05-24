@@ -196,6 +196,7 @@ def main():
     if args.debug:
         print("Running in DEBUG mode")
         max_samples = 100  # Limit dataset size
+        args.epochs = 2
     else:
         max_samples = None
 

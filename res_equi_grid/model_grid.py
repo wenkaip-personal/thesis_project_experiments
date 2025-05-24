@@ -139,7 +139,9 @@ class ResNet3D(nn.Module):
         x2 = self.layer2(x1)  # (bs, 256, 7, 7, 7 )
         x3 = self.layer3(x2) # (bs, 512, 3, 3, 3)
         x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
-        out = x_out.squeeze()
+        
+        # Changed: squeeze only the spatial dimensions (2, 3, 4), not batch dimension (0)
+        out = x_out.view(x_out.size(0), -1)  # Reshape to (batch_size, features)
         out = self.fc(out)
         return out
 
