@@ -106,16 +106,18 @@ for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
 ax3.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
            c='lightblue', s=20, alpha=0.4, marker='s')
 
-# Plot edges
-edges_to_plot = edge_index
-
-for atom_idx, grid_idx in edges_to_plot:
-    atom_pos = atom_coords[atom_idx]
-    grid_pos = grid_coords[grid_idx]
-    ax3.plot([atom_pos[0], grid_pos[0]], 
-            [atom_pos[1], grid_pos[1]], 
-            [atom_pos[2], grid_pos[2]], 
-            'gray', alpha=0.3, linewidth=0.5)
+# Plot ALL edges with very low opacity
+for i in range(edge_index.shape[1]):
+    src, dst = edge_index[0, i], edge_index[1, i]
+    if src < len(atom_coords):
+        atom_pos = atom_coords[src]
+        grid_idx = dst - len(atom_coords)
+        if 0 <= grid_idx < len(grid_coords):
+            grid_pos = grid_coords[grid_idx]
+            ax3.plot([atom_pos[0], grid_pos[0]], 
+                    [atom_pos[1], grid_pos[1]], 
+                    [atom_pos[2], grid_pos[2]], 
+                    'gray', alpha=0.1, linewidth=0.3, zorder=1)
 
 ax3.set_xlabel('X (Å)')
 ax3.set_ylabel('Y (Å)')
@@ -153,13 +155,17 @@ for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
 ax.scatter(grid_coords[:, 0], grid_coords[:, 1], c='lightblue', s=50, 
           alpha=0.5, marker='s', zorder=2)
 
-# Plot edges
-for atom_idx, grid_idx in edges_to_plot:
-    atom_pos = atom_coords[atom_idx]
-    grid_pos = grid_coords[grid_idx]
-    ax.plot([atom_pos[0], grid_pos[0]], 
-           [atom_pos[1], grid_pos[1]], 
-           'gray', alpha=0.2, linewidth=0.8, zorder=1)
+# Plot ALL edges
+for i in range(edge_index.shape[1]):
+    src, dst = edge_index[0, i], edge_index[1, i]
+    if src < len(atom_coords):
+        atom_pos = atom_coords[src]
+        grid_idx = dst - len(atom_coords)
+        if 0 <= grid_idx < len(grid_coords):
+            grid_pos = grid_coords[grid_idx]
+            ax.plot([atom_pos[0], grid_pos[0]], 
+                    [atom_pos[1], grid_pos[1]], 
+                    'gray', alpha=0.05, linewidth=0.5, zorder=1)
 
 ax.set_xlabel('X (Å)', fontsize=12)
 ax.set_ylabel('Y (Å)', fontsize=12)
