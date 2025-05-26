@@ -5,6 +5,11 @@ from mpl_toolkits.mplot3d import Axes3D
 from dataset_grid import Protein, _element_mapping, _amino_acids
 from torch_cluster import knn, radius
 import matplotlib.patches as mpatches
+import os
+
+# Create output directory for plots
+output_dir = '/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_equi_grid/visualizations/'
+os.makedirs(output_dir, exist_ok=True)
 
 # Load the dataset
 data_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/'
@@ -127,6 +132,12 @@ plt.suptitle(f'ATOM3D RES Dataset Visualization - Target Amino Acid: {target_aa_
              f'and {edge_index.shape[1]} edges', fontsize=14)
 
 plt.tight_layout()
+
+# Save the 3D visualization
+fig.savefig(os.path.join(output_dir, 'atom3d_res_3d_visualization.png'), 
+            dpi=300, bbox_inches='tight')
+fig.savefig(os.path.join(output_dir, 'atom3d_res_3d_visualization.pdf'), 
+            bbox_inches='tight')
 plt.show()
 
 # Create a 2D projection for clearer edge visualization
@@ -170,10 +181,66 @@ legend_elements.append(mpatches.Patch(color='lightblue', label='Grid points'))
 ax.legend(handles=legend_elements, loc='upper right')
 
 plt.tight_layout()
+
+# Save the 2D projection
+fig2.savefig(os.path.join(output_dir, 'atom3d_res_2d_projection.png'), 
+             dpi=300, bbox_inches='tight')
+fig2.savefig(os.path.join(output_dir, 'atom3d_res_2d_projection.pdf'), 
+             bbox_inches='tight')
+plt.show()
+
+# Create individual component plots for detailed analysis
+fig3, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+# Atom distribution histogram
+ax = axes[0, 0]
+unique_atoms, counts = np.unique(atom_types, return_counts=True)
+atom_names = [element_names[i] for i in unique_atoms]
+ax.bar(atom_names, counts, color=[colors[i] for i in unique_atoms])
+ax.set_xlabel('Atom Type')
+ax.set_ylabel('Count')
+ax.set_title('Atom Type Distribution')
+
+# Distance distribution
+ax = axes[0, 1]
+distances_from_ca = np.linalg.norm(atom_coords - atom_coords[ca_idx], axis=1)
+ax.hist(distances_from_ca[distances_from_ca > 0], bins=20, alpha=0.7, color='steelblue')
+ax.set_xlabel('Distance from CA (Å)')
+ax.set_ylabel('Count')
+ax.set_title('Distance Distribution from Central CA')
+
+# Edge degree distribution
+ax = axes[1, 0]
+atom_degrees = np.bincount(edge_index[0][edge_index[0] < len(atom_coords)])
+ax.hist(atom_degrees, bins=np.arange(0, atom_degrees.max() + 2) - 0.5, 
+        alpha=0.7, color='darkgreen')
+ax.set_xlabel('Degree (number of connections)')
+ax.set_ylabel('Count')
+ax.set_title('Atom Connectivity Degree Distribution')
+
+# Grid utilization
+ax = axes[1, 1]
+grid_degrees = np.bincount(edge_index[1][edge_index[1] >= len(atom_coords)] - len(atom_coords))
+utilized_grid_points = np.sum(grid_degrees > 0)
+total_grid_points = len(grid_coords)
+labels = ['Connected', 'Unconnected']
+sizes = [utilized_grid_points, total_grid_points - utilized_grid_points]
+ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, 
+       colors=['lightgreen', 'lightcoral'])
+ax.set_title(f'Grid Point Utilization\n({utilized_grid_points}/{total_grid_points} connected)')
+
+plt.suptitle(f'ATOM3D RES Sample Analysis - Target: {target_aa_name}', fontsize=14)
+plt.tight_layout()
+
+# Save the analysis plots
+fig3.savefig(os.path.join(output_dir, 'atom3d_res_sample_analysis.png'), 
+             dpi=300, bbox_inches='tight')
+fig3.savefig(os.path.join(output_dir, 'atom3d_res_sample_analysis.pdf'), 
+             bbox_inches='tight')
 plt.show()
 
 # Print summary statistics
-print(f"Dataset Sample Summary:")
+print(f"\nDataset Sample Summary:")
 print(f"- Target amino acid: {target_aa_name} (class {target_aa})")
 print(f"- Number of atoms: {len(atom_coords)}")
 print(f"- Number of grid points: {len(grid_coords)}")
@@ -182,6 +249,7 @@ print(f"- Central CA atom index: {ca_idx}")
 print(f"- Coordinate range: X [{atom_coords[:, 0].min():.2f}, {atom_coords[:, 0].max():.2f}], "
       f"Y [{atom_coords[:, 1].min():.2f}, {atom_coords[:, 1].max():.2f}], "
       f"Z [{atom_coords[:, 2].min():.2f}, {atom_coords[:, 2].max():.2f}]")
-print(f"- Grid spacing: {dataset.spacing} Å")
+print(f"- Grid dimensions: {dataset.size}×{dataset.size}×{dataset.size}")
 print(f"- Edge search radius: {dataset.radius} Å")
 print(f"- k-nearest neighbors: {dataset.k}")
+print(f"\nPlots saved to: {output_dir}")
