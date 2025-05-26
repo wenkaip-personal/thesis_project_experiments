@@ -106,9 +106,8 @@ for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
 ax3.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
            c='lightblue', s=20, alpha=0.4, marker='s')
 
-# Plot edges (sampling for clarity)
-max_edges_to_show = 50
-edges_to_plot = edges_atom_to_grid[:max_edges_to_show]
+# Plot edges
+edges_to_plot = edge_index
 
 for atom_idx, grid_idx in edges_to_plot:
     atom_pos = atom_coords[atom_idx]
@@ -126,10 +125,6 @@ ax3.set_zlabel('Z (Å)')
 aa_names = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLU', 'GLN', 'GLY', 'HIS', 'ILE',
             'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
 target_aa_name = aa_names[target_aa] if target_aa < 20 else 'Unknown'
-
-plt.suptitle(f'ATOM3D RES Dataset Visualization - Target Amino Acid: {target_aa_name}\n'
-             f'Sample contains {len(atom_coords)} atoms, {len(grid_coords)} grid points, '
-             f'and {edge_index.shape[1]} edges', fontsize=14)
 
 plt.tight_layout()
 
