@@ -213,6 +213,10 @@ class Protein:
             grid_data.num_atoms = coords.size(0)  # Number of atoms
             grid_data.num_grid_points = self.grid_coords.size(0)  # Number of grid points
             grid_data.is_atom_mask = torch.cat((torch.ones(coords.size(0)), torch.zeros(self.grid_coords.size(0))))
+
+            print(f"Number of edges: {edge_index.shape[1]}")
+            print(f"Edge index range: atoms [0, {coords.size(0)-1}], grid [{coords.size(0)}, {coords.size(0) + self.grid_coords.size(0) - 1}]")
+            print(f"Actual edge indices - min: {edge_index.min()}, max: {edge_index.max()}")
             
             return grid_data
 
