@@ -191,20 +191,32 @@ class Protein:
             row_1, col_1 = knn(coords, self.grid_coords, k=self.k)
             row_2, col_2 = knn(self.grid_coords, coords, k=self.k)
 
+            # CRITICAL: Offset grid indices by the number of atoms
             edge_index_knn = torch.stack(
-                (torch.cat((col_1, row_2)),
-                torch.cat((row_1, col_2)))
+                (torch.cat((col_1, row_2 + coords.size(0))),  # Add offset here
+                torch.cat((row_1 + coords.size(0), col_2)))  # Add offset here
             )
 
             row_1, col_1 = radius(coords, self.grid_coords, r=4)
             row_2, col_2 = radius(self.grid_coords, coords, r=4)
+
+            # CRITICAL: Apply the same offset for radius-based edges
             edge_index_radius = torch.stack(
-                (torch.cat((col_1, row_2)),
-                torch.cat((row_1, col_2)))
+                (torch.cat((col_1, row_2 + coords.size(0))),  # Add offset here
+                torch.cat((row_1 + coords.size(0), col_2)))  # Add offset here
             )
+
             edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
 
             edge_index = torch_geometric.utils.coalesce(edge_index)
+
+            print(f"Edge verification:")
+            print(f"  Min source index: {edge_index[0].min()}")
+            print(f"  Max source index: {edge_index[0].max()}")
+            print(f"  Min target index: {edge_index[1].min()}")
+            print(f"  Max target index: {edge_index[1].max()}")
+            print(f"  Expected max index: {coords.size(0) + self.grid_coords.size(0) - 1}")
+
             grid_data.grid_edge_index = edge_index
             grid_data.grid_size = self.size
 
@@ -213,10 +225,6 @@ class Protein:
             grid_data.num_atoms = coords.size(0)  # Number of atoms
             grid_data.num_grid_points = self.grid_coords.size(0)  # Number of grid points
             grid_data.is_atom_mask = torch.cat((torch.ones(coords.size(0)), torch.zeros(self.grid_coords.size(0))))
-
-            print(f"Number of edges: {edge_index.shape[1]}")
-            print(f"Edge index range: atoms [0, {coords.size(0)-1}], grid [{coords.size(0)}, {coords.size(0) + self.grid_coords.size(0) - 1}]")
-            print(f"Actual edge indices - min: {edge_index.min()}, max: {edge_index.max()}")
             
             return grid_data
 
