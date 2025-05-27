@@ -117,7 +117,7 @@ for i in range(edge_index.shape[1]):
             ax3.plot([atom_pos[0], grid_pos[0]], 
                     [atom_pos[1], grid_pos[1]], 
                     [atom_pos[2], grid_pos[2]], 
-                    'gray', alpha=0.1, linewidth=0.3, zorder=1)
+                    'red', alpha=0.5, linewidth=1.0, zorder=1)
 
 ax3.set_xlabel('X (Å)')
 ax3.set_ylabel('Y (Å)')
@@ -165,7 +165,7 @@ for i in range(edge_index.shape[1]):
             grid_pos = grid_coords[grid_idx]
             ax.plot([atom_pos[0], grid_pos[0]], 
                     [atom_pos[1], grid_pos[1]], 
-                    'gray', alpha=0.05, linewidth=0.5, zorder=1)
+                    'red', alpha=0.5, linewidth=1.0, zorder=1)
 
 ax.set_xlabel('X (Å)', fontsize=12)
 ax.set_ylabel('Y (Å)', fontsize=12)
