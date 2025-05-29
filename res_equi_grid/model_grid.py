@@ -175,7 +175,6 @@ class ProteinGrid(nn.Module):
         atom_types = batch.atom_types.to(torch.long)   
         atom_on_bb = batch.atom_on_bb.to(torch.long)
         res_types = batch.res_types.to(torch.long)
-        edge_index = batch.grid_edge_index
         atom_embedding = self.atom_embedding(atom_types)
         res_embedding = self.res_embedding(res_types)
         on_bb_embedding = self.on_bb_embedding(atom_on_bb)
