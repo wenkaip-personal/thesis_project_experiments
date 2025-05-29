@@ -78,7 +78,7 @@ class Protein:
             self.idx = list(range(len(self.dataset)))
             
         # Filter out invalid samples
-        # self.idx = self._filter_valid_samples(self.idx)
+        self.idx = self._filter_valid_samples(self.idx)
         
         if max_samples is not None:
             self.idx = self.idx[:max_samples]
