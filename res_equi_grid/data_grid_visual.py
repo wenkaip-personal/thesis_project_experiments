@@ -1,256 +1,275 @@
 import torch
-import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from dataset_grid import Protein, _element_mapping, _amino_acids
+import numpy as np
 from torch_cluster import knn, radius
-import matplotlib.patches as mpatches
+import sys
 import os
 
-# Create output directory for plots
-output_dir = '/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_equi_grid/visualizations/'
-os.makedirs(output_dir, exist_ok=True)
+# Add the path to import custom modules
+sys.path.append('/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_equi_grid/')
 
-# Load the dataset
-data_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/'
+# Import required classes from the existing implementation
+from dataset_grid import Protein, GridData, _element_mapping, _amino_acids
+
+# Set up the data paths
+lmdb_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/'
 split_path = '/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/train_indices.txt'
 
-# Initialize the dataset with visualization-friendly parameters
+# Initialize the dataset with the same parameters as in main_grid.py
 dataset = Protein(
-    lmdb_path=data_path,
+    lmdb_path=lmdb_path,
     split_path=split_path,
     radius=4.5,
-    k=3,
+    k=2,
     knn=True,
-    size=5,  # Using smaller grid for clearer visualization
-    spacing=4,
-    max_samples=10
+    size=9,
+    spacing=8,
+    max_samples=10  # Load only a few samples for visualization
 )
 
-# Get a sample
+# Get the first valid sample
 sample_idx = 0
 grid_data = dataset[sample_idx]
 
 # Extract data from the sample
-atom_coords = grid_data.coords.numpy()
-grid_coords = grid_data.grid_coords.numpy()
+atom_coords = grid_data.coords.numpy()  # Atom positions (centered at CA)
+grid_coords = grid_data.grid_coords.numpy()  # Grid positions
 atom_types = grid_data.atom_types.numpy()
-ca_idx = grid_data.cb_index.item()  # Central amino acid index
-target_aa = grid_data.y.item()  # Target amino acid type
+res_types = grid_data.res_types.numpy()
+ca_idx = grid_data.cb_index.item()  # CA atom index
 
-# Get atom type names for labeling
+# Element mapping reverse lookup for visualization
 element_names = ['H', 'C', 'N', 'O', 'F', 'S', 'Cl', 'P', 'Other']
-atom_elements = [element_names[at] for at in atom_types]
+amino_acid_names = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLU', 'GLN', 'GLY', 'HIS', 
+                    'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 
+                    'TYR', 'VAL', 'UNK']
 
-# Extract edge information
-edge_index = grid_data.grid_edge_index.numpy()
-edges_atom_to_grid = []
-edges_grid_to_atom = []
+# Compute edges using the same logic as in the model
+# Convert to torch tensors for edge computation
+atom_coords_torch = torch.tensor(atom_coords, dtype=torch.float32)
+grid_coords_torch = torch.tensor(grid_coords, dtype=torch.float32)
 
-for i in range(edge_index.shape[1]):
-    src, dst = edge_index[0, i], edge_index[1, i]
-    if src < len(atom_coords) and dst >= len(atom_coords):
-        # Atom to grid edge
-        edges_atom_to_grid.append((src, dst - len(atom_coords)))
-    elif src >= len(atom_coords) and dst < len(atom_coords):
-        # Grid to atom edge
-        edges_grid_to_atom.append((src - len(atom_coords), dst))
+# Create batch indices (single sample, so all zeros)
+atom_batch = torch.zeros(len(atom_coords), dtype=torch.long)
+grid_batch = torch.zeros(len(grid_coords), dtype=torch.long)
 
-# Create the visualization
-fig = plt.figure(figsize=(16, 6))
+# Compute KNN edges (k=3 as in model)
+row_1, col_1 = knn(atom_coords_torch, grid_coords_torch, k=3, batch_x=atom_batch, batch_y=grid_batch)
+row_2, col_2 = knn(grid_coords_torch, atom_coords_torch, k=3, batch_x=grid_batch, batch_y=atom_batch)
 
-# First subplot: Atom positions only
-ax1 = fig.add_subplot(131, projection='3d')
-ax1.set_title('Protein Residue Environment\n(Centered at CA atom)', fontsize=12)
+edge_index_knn = torch.stack(
+    (torch.cat((col_1, row_2)),
+     torch.cat((row_1, col_2)))
+)
 
-# Plot atoms with different colors for different elements
-colors = ['red', 'gray', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink', 'brown']
-for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
+# Compute radius edges (r=4 as in model)
+row_1_r, col_1_r = radius(atom_coords_torch, grid_coords_torch, r=4, batch_x=atom_batch, batch_y=grid_batch)
+row_2_r, col_2_r = radius(grid_coords_torch, atom_coords_torch, r=4, batch_x=grid_batch, batch_y=atom_batch)
+
+edge_index_radius = torch.stack(
+    (torch.cat((col_1_r, row_2_r)),
+     torch.cat((row_1_r, col_2_r)))
+)
+
+# Combine and coalesce edges
+edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
+edge_index = torch.unique(edge_index, dim=1)  # Remove duplicates
+
+# Create figure with subplots
+fig = plt.figure(figsize=(20, 15))
+
+# 1. Sample Overview - Show all atoms with their types
+ax1 = fig.add_subplot(2, 3, 1, projection='3d')
+ax1.set_title('Sample Protein Structure\n(Colored by Element Type)', fontsize=14)
+
+# Color atoms by element type
+colors = plt.cm.tab10(np.linspace(0, 1, 9))
+for i, (coord, elem_type) in enumerate(zip(atom_coords, atom_types)):
+    color = colors[elem_type]
+    size = 100 if i == ca_idx else 50
+    marker = 'o' if i == ca_idx else 'o'
+    ax1.scatter(coord[0], coord[1], coord[2], c=[color], s=size, marker=marker, alpha=0.8)
     if i == ca_idx:
-        ax1.scatter(coord[0], coord[1], coord[2], c='gold', s=200, marker='*', 
-                   edgecolors='black', linewidth=2, label='Central CA atom')
-    else:
-        ax1.scatter(coord[0], coord[1], coord[2], c=colors[elem], s=50, alpha=0.8)
+        ax1.text(coord[0], coord[1], coord[2], 'CA', fontsize=12, fontweight='bold')
 
-ax1.set_xlabel('X (Å)')
-ax1.set_ylabel('Y (Å)')
-ax1.set_zlabel('Z (Å)')
-ax1.legend()
+ax1.set_xlabel('X')
+ax1.set_ylabel('Y')
+ax1.set_zlabel('Z')
+ax1.set_title(f'Sample Protein Structure\n(Target: {amino_acid_names[grid_data.y.item()]})', fontsize=14)
 
-# Second subplot: Grid points only
-ax2 = fig.add_subplot(132, projection='3d')
-ax2.set_title(f'3D Grid Structure\n({dataset.size}×{dataset.size}×{dataset.size} points)', 
-              fontsize=12)
-
-# Plot grid points
+# 2. Grid Structure
+ax2 = fig.add_subplot(2, 3, 2, projection='3d')
+ax2.set_title('Grid Structure (9x9x9)', fontsize=14)
 ax2.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
-           c='lightblue', s=30, alpha=0.6, marker='s')
+           c='red', s=30, alpha=0.5, marker='s')
+ax2.set_xlabel('X')
+ax2.set_ylabel('Y')
+ax2.set_zlabel('Z')
 
-ax2.set_xlabel('X (Å)')
-ax2.set_ylabel('Y (Å)')
-ax2.set_zlabel('Z (Å)')
-
-# Third subplot: Combined view with edges
-ax3 = fig.add_subplot(133, projection='3d')
-ax3.set_title('Atom-Grid Connectivity\n(k-NN and radius edges)', fontsize=12)
+# 3. Combined View - Atoms and Grid
+ax3 = fig.add_subplot(2, 3, 3, projection='3d')
+ax3.set_title('Atoms and Grid Combined', fontsize=14)
 
 # Plot atoms
-for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
+for i, coord in enumerate(atom_coords):
+    size = 150 if i == ca_idx else 80
+    ax3.scatter(coord[0], coord[1], coord[2], c='blue', s=size, alpha=0.8)
     if i == ca_idx:
-        ax3.scatter(coord[0], coord[1], coord[2], c='gold', s=200, marker='*', 
-                   edgecolors='black', linewidth=2)
-    else:
-        ax3.scatter(coord[0], coord[1], coord[2], c=colors[elem], s=50, alpha=0.8)
+        ax3.text(coord[0], coord[1], coord[2], 'CA', fontsize=10, fontweight='bold')
 
 # Plot grid points
 ax3.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
-           c='lightblue', s=20, alpha=0.4, marker='s')
+           c='red', s=20, alpha=0.3, marker='s')
 
-# Plot ALL edges with very low opacity
-for i in range(edge_index.shape[1]):
-    src, dst = edge_index[0, i], edge_index[1, i]
-    if src < len(atom_coords):
-        atom_pos = atom_coords[src]
-        grid_idx = dst - len(atom_coords)
-        if 0 <= grid_idx < len(grid_coords):
-            grid_pos = grid_coords[grid_idx]
-            ax3.plot([atom_pos[0], grid_pos[0]], 
-                    [atom_pos[1], grid_pos[1]], 
-                    [atom_pos[2], grid_pos[2]], 
-                    'red', alpha=0.5, linewidth=1.0, zorder=1)
+ax3.set_xlabel('X')
+ax3.set_ylabel('Y')
+ax3.set_zlabel('Z')
 
-ax3.set_xlabel('X (Å)')
-ax3.set_ylabel('Y (Å)')
-ax3.set_zlabel('Z (Å)')
+# 4. KNN Edges
+ax4 = fig.add_subplot(2, 3, 4, projection='3d')
+ax4.set_title('K-Nearest Neighbor Edges (k=3)', fontsize=14)
 
-# Add title with dataset information
-aa_names = ['ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLU', 'GLN', 'GLY', 'HIS', 'ILE',
-            'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
-target_aa_name = aa_names[target_aa] if target_aa < 20 else 'Unknown'
+# Plot atoms and grid
+ax4.scatter(atom_coords[:, 0], atom_coords[:, 1], atom_coords[:, 2], 
+           c='blue', s=50, alpha=0.8, label='Atoms')
+ax4.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
+           c='red', s=20, alpha=0.3, marker='s', label='Grid')
 
-plt.tight_layout()
+# Draw KNN edges
+knn_edges = edge_index_knn.numpy()
+num_atoms = len(atom_coords)
+for i in range(knn_edges.shape[1]):
+    idx1, idx2 = knn_edges[:, i]
+    # Determine if edge connects atom to grid or grid to atom
+    if idx1 < num_atoms:  # atom to grid
+        start = atom_coords[idx1]
+        end = grid_coords[idx2]
+    else:  # grid to atom
+        start = grid_coords[idx1 - num_atoms]
+        end = atom_coords[idx2]
+    ax4.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], 
+            'g-', alpha=0.2, linewidth=0.5)
 
-# Save the 3D visualization
-fig.savefig(os.path.join(output_dir, 'atom3d_res_3d_visualization.png'), 
-            dpi=300, bbox_inches='tight')
-fig.savefig(os.path.join(output_dir, 'atom3d_res_3d_visualization.pdf'), 
-            bbox_inches='tight')
-plt.show()
+ax4.set_xlabel('X')
+ax4.set_ylabel('Y')
+ax4.set_zlabel('Z')
+ax4.legend()
 
-# Create a 2D projection for clearer edge visualization
-fig2, ax = plt.subplots(figsize=(10, 8))
-ax.set_title('2D Projection (XY plane) - Atom-Grid Connectivity', fontsize=14)
+# 5. Radius Edges
+ax5 = fig.add_subplot(2, 3, 5, projection='3d')
+ax5.set_title('Radius Edges (r=4.0)', fontsize=14)
 
-# Plot atoms
-for i, (coord, elem) in enumerate(zip(atom_coords, atom_types)):
+# Plot atoms and grid
+ax5.scatter(atom_coords[:, 0], atom_coords[:, 1], atom_coords[:, 2], 
+           c='blue', s=50, alpha=0.8, label='Atoms')
+ax5.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
+           c='red', s=20, alpha=0.3, marker='s', label='Grid')
+
+# Draw radius edges
+radius_edges = edge_index_radius.numpy()
+for i in range(radius_edges.shape[1]):
+    idx1, idx2 = radius_edges[:, i]
+    # Determine if edge connects atom to grid or grid to atom
+    if idx1 < num_atoms:  # atom to grid
+        start = atom_coords[idx1]
+        end = grid_coords[idx2]
+    else:  # grid to atom
+        start = grid_coords[idx1 - num_atoms]
+        end = atom_coords[idx2]
+    ax5.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], 
+            'orange', alpha=0.1, linewidth=0.5)
+
+ax5.set_xlabel('X')
+ax5.set_ylabel('Y')
+ax5.set_zlabel('Z')
+ax5.legend()
+
+# 6. All Edges Combined
+ax6 = fig.add_subplot(2, 3, 6, projection='3d')
+ax6.set_title('All Edges (KNN + Radius)', fontsize=14)
+
+# Plot atoms with CA highlighted
+for i, coord in enumerate(atom_coords):
     if i == ca_idx:
-        ax.scatter(coord[0], coord[1], c='gold', s=300, marker='*', 
-                  edgecolors='black', linewidth=2, zorder=5)
-        ax.annotate('CA', (coord[0], coord[1]), xytext=(5, 5), 
-                   textcoords='offset points', fontweight='bold')
+        ax6.scatter(coord[0], coord[1], coord[2], c='green', s=200, alpha=1.0, 
+                   marker='*', label='CA (Central)', edgecolors='black', linewidth=2)
     else:
-        ax.scatter(coord[0], coord[1], c=colors[elem], s=100, alpha=0.8, zorder=3)
+        ax6.scatter(coord[0], coord[1], coord[2], c='blue', s=50, alpha=0.8)
 
 # Plot grid points
-ax.scatter(grid_coords[:, 0], grid_coords[:, 1], c='lightblue', s=50, 
-          alpha=0.5, marker='s', zorder=2)
+ax6.scatter(grid_coords[:, 0], grid_coords[:, 1], grid_coords[:, 2], 
+           c='red', s=20, alpha=0.3, marker='s', label='Grid')
 
-# Plot ALL edges
-for i in range(edge_index.shape[1]):
-    src, dst = edge_index[0, i], edge_index[1, i]
-    if src < len(atom_coords):
-        atom_pos = atom_coords[src]
-        grid_idx = dst - len(atom_coords)
-        if 0 <= grid_idx < len(grid_coords):
-            grid_pos = grid_coords[grid_idx]
-            ax.plot([atom_pos[0], grid_pos[0]], 
-                    [atom_pos[1], grid_pos[1]], 
-                    'red', alpha=0.5, linewidth=1.0, zorder=1)
+# Draw all edges
+all_edges = edge_index.numpy()
+for i in range(all_edges.shape[1]):
+    idx1, idx2 = all_edges[:, i]
+    # Determine if edge connects atom to grid or grid to atom
+    if idx1 < num_atoms:  # atom to grid
+        start = atom_coords[idx1]
+        end = grid_coords[idx2]
+    else:  # grid to atom
+        start = grid_coords[idx1 - num_atoms]
+        end = atom_coords[idx2]
+    ax6.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], 
+            'gray', alpha=0.1, linewidth=0.5)
 
-ax.set_xlabel('X (Å)', fontsize=12)
-ax.set_ylabel('Y (Å)', fontsize=12)
-ax.grid(True, alpha=0.3)
+ax6.set_xlabel('X')
+ax6.set_ylabel('Y')
+ax6.set_zlabel('Z')
+ax6.legend()
 
-# Create legend for atom types
-legend_elements = []
-for i, elem_name in enumerate(element_names[:8]):
-    if i in atom_types:
-        legend_elements.append(mpatches.Patch(color=colors[i], label=elem_name))
-legend_elements.append(mpatches.Patch(color='gold', label='Central CA'))
-legend_elements.append(mpatches.Patch(color='lightblue', label='Grid points'))
-
-ax.legend(handles=legend_elements, loc='upper right')
-
+# Adjust layout and save
 plt.tight_layout()
-
-# Save the 2D projection
-fig2.savefig(os.path.join(output_dir, 'atom3d_res_2d_projection.png'), 
-             dpi=300, bbox_inches='tight')
-fig2.savefig(os.path.join(output_dir, 'atom3d_res_2d_projection.pdf'), 
-             bbox_inches='tight')
+plt.savefig('equi_grid_visualization.png', dpi=300, bbox_inches='tight')
 plt.show()
 
-# Create individual component plots for detailed analysis
-fig3, axes = plt.subplots(2, 2, figsize=(12, 10))
-
-# Atom distribution histogram
-ax = axes[0, 0]
-unique_atoms, counts = np.unique(atom_types, return_counts=True)
-atom_names = [element_names[i] for i in unique_atoms]
-ax.bar(atom_names, counts, color=[colors[i] for i in unique_atoms])
-ax.set_xlabel('Atom Type')
-ax.set_ylabel('Count')
-ax.set_title('Atom Type Distribution')
-
-# Distance distribution
-ax = axes[0, 1]
-distances_from_ca = np.linalg.norm(atom_coords - atom_coords[ca_idx], axis=1)
-ax.hist(distances_from_ca[distances_from_ca > 0], bins=20, alpha=0.7, color='steelblue')
-ax.set_xlabel('Distance from CA (Å)')
-ax.set_ylabel('Count')
-ax.set_title('Distance Distribution from Central CA')
-
-# Edge degree distribution
-ax = axes[1, 0]
-atom_degrees = np.bincount(edge_index[0][edge_index[0] < len(atom_coords)])
-ax.hist(atom_degrees, bins=np.arange(0, atom_degrees.max() + 2) - 0.5, 
-        alpha=0.7, color='darkgreen')
-ax.set_xlabel('Degree (number of connections)')
-ax.set_ylabel('Count')
-ax.set_title('Atom Connectivity Degree Distribution')
-
-# Grid utilization
-ax = axes[1, 1]
-grid_degrees = np.bincount(edge_index[1][edge_index[1] >= len(atom_coords)] - len(atom_coords))
-utilized_grid_points = np.sum(grid_degrees > 0)
-total_grid_points = len(grid_coords)
-labels = ['Connected', 'Unconnected']
-sizes = [utilized_grid_points, total_grid_points - utilized_grid_points]
-ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, 
-       colors=['lightgreen', 'lightcoral'])
-ax.set_title(f'Grid Point Utilization\n({utilized_grid_points}/{total_grid_points} connected)')
-
-plt.suptitle(f'ATOM3D RES Sample Analysis - Target: {target_aa_name}', fontsize=14)
-plt.tight_layout()
-
-# Save the analysis plots
-fig3.savefig(os.path.join(output_dir, 'atom3d_res_sample_analysis.png'), 
-             dpi=300, bbox_inches='tight')
-fig3.savefig(os.path.join(output_dir, 'atom3d_res_sample_analysis.pdf'), 
-             bbox_inches='tight')
-plt.show()
-
-# Print summary statistics
-print(f"\nDataset Sample Summary:")
-print(f"- Target amino acid: {target_aa_name} (class {target_aa})")
+# Print statistics
+print(f"Sample Statistics:")
 print(f"- Number of atoms: {len(atom_coords)}")
 print(f"- Number of grid points: {len(grid_coords)}")
-print(f"- Total edges: {edge_index.shape[1]}")
-print(f"- Central CA atom index: {ca_idx}")
-print(f"- Coordinate range: X [{atom_coords[:, 0].min():.2f}, {atom_coords[:, 0].max():.2f}], "
-      f"Y [{atom_coords[:, 1].min():.2f}, {atom_coords[:, 1].max():.2f}], "
-      f"Z [{atom_coords[:, 2].min():.2f}, {atom_coords[:, 2].max():.2f}]")
-print(f"- Grid dimensions: {dataset.size}×{dataset.size}×{dataset.size}")
-print(f"- Edge search radius: {dataset.radius} Å")
-print(f"- k-nearest neighbors: {dataset.k}")
-print(f"\nPlots saved to: {output_dir}")
+print(f"- Target amino acid: {amino_acid_names[grid_data.y.item()]}")
+print(f"- CA atom index: {ca_idx}")
+print(f"- Number of KNN edges: {edge_index_knn.shape[1]}")
+print(f"- Number of radius edges: {edge_index_radius.shape[1]}")
+print(f"- Total number of edges: {edge_index.shape[1]}")
+
+# Create a second figure for detailed edge analysis
+fig2, (ax7, ax8) = plt.subplots(1, 2, figsize=(12, 5))
+
+# Edge distance distribution
+edge_distances = []
+for i in range(all_edges.shape[1]):
+    idx1, idx2 = all_edges[:, i]
+    if idx1 < num_atoms:
+        dist = np.linalg.norm(atom_coords[idx1] - grid_coords[idx2])
+    else:
+        dist = np.linalg.norm(grid_coords[idx1 - num_atoms] - atom_coords[idx2])
+    edge_distances.append(dist)
+
+ax7.hist(edge_distances, bins=50, alpha=0.7, color='purple')
+ax7.set_xlabel('Edge Distance')
+ax7.set_ylabel('Count')
+ax7.set_title('Distribution of Edge Distances')
+ax7.axvline(x=3, color='red', linestyle='--', label='k=3 threshold')
+ax7.axvline(x=4, color='orange', linestyle='--', label='r=4 threshold')
+ax7.legend()
+
+# Connectivity analysis
+atom_degrees = np.bincount(all_edges[0][all_edges[0] < num_atoms])
+grid_degrees = np.bincount(all_edges[1][all_edges[1] >= num_atoms] - num_atoms)
+
+ax8.bar(['Atoms', 'Grid Points'], [atom_degrees.mean(), grid_degrees.mean()], 
+        color=['blue', 'red'], alpha=0.7)
+ax8.set_ylabel('Average Degree')
+ax8.set_title('Average Node Connectivity')
+
+plt.tight_layout()
+plt.savefig('equi_grid_edge_analysis.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f"\nConnectivity Statistics:")
+print(f"- Average atom degree: {atom_degrees.mean():.2f}")
+print(f"- Average grid point degree: {grid_degrees.mean():.2f}")
+print(f"- Min/Max edge distance: {min(edge_distances):.2f} / {max(edge_distances):.2f}")
