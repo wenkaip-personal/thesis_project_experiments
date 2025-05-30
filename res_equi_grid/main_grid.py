@@ -127,7 +127,7 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
         })
         
     avg_acc = sum(all_acc) / len(all_acc) if all_acc else 0
-    return total_loss / total_count, avg_acc * 100  # Convert to percentage
+    return total_loss / total_count, avg_acc
 
 def train(model, train_loader, val_loader):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

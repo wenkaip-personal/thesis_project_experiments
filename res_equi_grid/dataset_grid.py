@@ -148,7 +148,6 @@ class Protein:
         atoms = data['atoms']
         
         # Process for one subunit in data['labels']
-        # We're selecting the first valid subunit for simplicity
         for sub in data['labels'].itertuples():
             _, num, aa = sub.subunit.split('_')
             num, aa = int(num), _amino_acids(aa)
@@ -169,7 +168,16 @@ class Protein:
             
             # Get atom features
             atom_types = torch.tensor([_element_mapping(e) for e in my_atoms.element], dtype=torch.long)
-            res_types = torch.tensor([_amino_acids(r) for r in my_atoms.resname], dtype=torch.long)
+            
+            # FIXED: Mask residue types for the central residue
+            res_types = []
+            for idx, (res_num, res_name) in enumerate(zip(my_atoms.residue, my_atoms.resname)):
+                if res_num == num:  # This atom belongs to the central residue
+                    res_types.append(20)  # Use 'unknown' type to mask the target
+                else:
+                    res_types.append(_amino_acids(res_name))
+            res_types = torch.tensor(res_types, dtype=torch.long)
+            
             atom_on_bb = torch.tensor([(n in ['N', 'CA', 'C', 'O']) for n in my_atoms.name], dtype=torch.long)
             
             # Physical features (placeholder values, replace with actual values if available)
