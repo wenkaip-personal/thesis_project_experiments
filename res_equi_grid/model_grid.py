@@ -3,246 +3,293 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
 from torch_geometric.nn import global_mean_pool, global_add_pool, radius_graph, knn, radius
+from torch_scatter import scatter_mean, scatter_add
 
-class equivariant_layer(nn.Module):
+class LocalEquivariantLayer(nn.Module):
+    """Learn orientations at residue level instead of batch level"""
     def __init__(self, hidden_features):
-        super(equivariant_layer, self).__init__()
+        super(LocalEquivariantLayer, self).__init__()
         self.hidden_features = hidden_features
-        self.message_net1 = nn.Sequential(
-            nn.Linear(2*hidden_features+1, hidden_features),
+        
+        # Networks for learning local orientations
+        self.orient_net = nn.Sequential(
+            nn.Linear(hidden_features, hidden_features),
             nn.ReLU(),
-            nn.Linear(hidden_features, 1),
-        )
-        self.message_net2 = nn.Sequential(
-            nn.Linear(2*hidden_features+1, hidden_features),
+            nn.Linear(hidden_features, hidden_features),
             nn.ReLU(),
-            nn.Linear(hidden_features, 1),
+            nn.Linear(hidden_features, 6)  # Two 3D vectors
         )
-        self.p = 5
-
-    def forward(self, x, pos, batch):
-        edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
-        dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
-        vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
-        vec1_out, vec2_out = global_add_pool(vec1, edge_index[0]), global_add_pool(vec2, edge_index[0])
-        vec1_out = global_mean_pool(vec1_out, batch)
-        vec2_out = global_mean_pool(vec2_out, batch)
-        return self.gram_schmidt_batch(vec1_out, vec2_out)
-
+        
+    def forward(self, x, pos, batch, ca_idx):
+        # Learn orientation vectors for each CA atom
+        ca_features = x[ca_idx]
+        orient_features = self.orient_net(ca_features)
+        
+        # Split into two vectors
+        vec1 = orient_features[:, :3]
+        vec2 = orient_features[:, 3:6]
+        
+        # Apply Gram-Schmidt orthogonalization
+        orientations = self.gram_schmidt_batch(vec1, vec2)
+        
+        return orientations
+    
     def gram_schmidt_batch(self, v1, v2):
-        n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
-        n2_prime = v2 - (n1 * v2).sum(dim=-1, keepdim=True) * n1
-        n2 = n2_prime / (torch.norm(n2_prime, dim=-1, keepdim=True)+1e-8)
+        # Normalize first vector
+        n1 = F.normalize(v1, dim=-1)
+        
+        # Make second vector orthogonal to first
+        v2_proj = (n1 * v2).sum(dim=-1, keepdim=True) * n1
+        v2_orth = v2 - v2_proj
+        n2 = F.normalize(v2_orth, dim=-1)
+        
+        # Third vector is cross product
         n3 = torch.cross(n1, n2, dim=-1)
+        
+        # Stack to form rotation matrices
         return torch.stack([n1, n2, n3], dim=-2)
-    
-    def omega(self, dist):
-        out = 1 - (self.p+1)*(self.p+2)/2 * (dist/4.5)**self.p + self.p*(self.p+2) * (dist/4.5)**(self.p+1) - self.p*(self.p+1)/2 * (dist/4.5)**(self.p+2)
-        return out
-    
-    def message(self, x_i, x_j, dist, pos_i, pos_j):
-        x_ij = torch.cat([x_i, x_j, dist], dim=-1)
-        mes_1 = self.message_net1(x_ij)
-        mes_2 = self.message_net2(x_ij)
-        coe = self.omega(dist)
-        norm_vec = (pos_i - pos_j) / (torch.norm(pos_i - pos_j, dim=-1, keepdim=True)+1e-8)
-        return norm_vec * coe * mes_1, norm_vec * coe * mes_2
 
-class MPNNLayer(nn.Module):
-    """ Message Passing Layer """
-    def __init__(self, edge_features=6, hidden_features=128, act=nn.SiLU):
+class GridificationLayer(nn.Module):
+    """Gridification layer with proper edge construction"""
+    def __init__(self, hidden_features=128, k_atoms_to_grid=3, k_grid_to_atoms=3, radius=4.5):
         super().__init__()
-        self.edge_model = nn.Sequential(nn.Linear(edge_features, hidden_features),
-                                        act(),
-                                        nn.Linear(hidden_features, hidden_features))
+        self.hidden_features = hidden_features
+        self.k_atoms_to_grid = k_atoms_to_grid
+        self.k_grid_to_atoms = k_grid_to_atoms
+        self.radius = radius
         
-        self.message_model = nn.Sequential(nn.Linear(hidden_features*2, hidden_features),
-                                           act(),
-                                           nn.Linear(hidden_features, hidden_features))
-
-        self.update_net =  nn.Sequential(nn.Linear(hidden_features, hidden_features),
-                                           act(),
-                                           nn.Linear(hidden_features, hidden_features))
+        # Message passing networks
+        self.message_net = nn.Sequential(
+            nn.Linear(2 * hidden_features + 1, hidden_features),
+            nn.ReLU(),
+            nn.Linear(hidden_features, hidden_features),
+            nn.ReLU(),
+            nn.Linear(hidden_features, hidden_features)
+        )
         
-    def forward(self, node_embedding, node_pos, grid_pos, edge_index):
-        message = self.message(node_embedding, node_pos, grid_pos, edge_index)
-        x = self.update(message, edge_index[1])
-        return x
-
-    def message(self, node_embedding, node_pos, grid_pos, edge_index):
-        index_i, index_j = edge_index[0], edge_index[1]
-        pos_nodes, pos_grids = node_pos[index_i], grid_pos[index_j]
-        edge_attr = torch.cat((pos_nodes, pos_grids), dim=-1)
-        pos_embedding = self.edge_model(edge_attr)
-        node_embedding = node_embedding[index_i]
-        message = torch.cat((node_embedding, pos_embedding), dim=-1)
-        message = self.message_model(message)
-        return message
-
-    def update(self, message, index_j):
-        """ Update node features """
-        num_messages = torch.bincount(index_j)
-        message = global_add_pool(message, index_j) / num_messages.unsqueeze(-1)
-        update = self.update_net(message)
-
-        return update
-
-class Block(nn.Module):
-    def __init__(self, in_channel, out_channel, stride=1):
-        super(Block, self).__init__()
-        self.left = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, padding=1, bias=False),
-            nn.BatchNorm3d(out_channel),
-            nn.ReLU(inplace=True),
-            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm3d(out_channel)
+        self.update_net = nn.Sequential(
+            nn.Linear(hidden_features, hidden_features),
+            nn.ReLU(),
+            nn.Linear(hidden_features, hidden_features)
         )
-        self.shortcut = nn.Sequential(
-            nn.Conv3d(in_channel, out_channel, kernel_size=5, stride=stride, padding=2, bias=False),
-            nn.BatchNorm3d(out_channel)
-        )
+        
+    def forward(self, atom_features, atom_pos, grid_pos, atom_batch, grid_batch):
+        # Build bipartite edges
+        edge_index = self.build_bipartite_edges(atom_pos, grid_pos, atom_batch, grid_batch)
+        
+        # Compute messages
+        row, col = edge_index
+        distances = torch.norm(atom_pos[row] - grid_pos[col], dim=-1, keepdim=True)
+        
+        # Message features
+        msg_input = torch.cat([
+            atom_features[row],
+            torch.zeros(col.size(0), self.hidden_features, device=atom_features.device),
+            distances
+        ], dim=-1)
+        
+        messages = self.message_net(msg_input)
+        
+        # Aggregate messages to grid points
+        grid_features = scatter_mean(messages, col, dim=0, dim_size=grid_pos.size(0))
+        grid_features = self.update_net(grid_features)
+        
+        return grid_features
+    
+    def build_bipartite_edges(self, atom_pos, grid_pos, atom_batch, grid_batch):
+        # KNN from atoms to grid
+        row1, col1 = knn(grid_pos, atom_pos, self.k_atoms_to_grid, 
+                         batch_x=grid_batch, batch_y=atom_batch)
+        
+        # KNN from grid to atoms
+        row2, col2 = knn(atom_pos, grid_pos, self.k_grid_to_atoms,
+                         batch_x=atom_batch, batch_y=grid_batch)
+        
+        # Radius edges
+        row3, col3 = radius(atom_pos, grid_pos, self.radius,
+                           batch_x=atom_batch, batch_y=grid_batch)
+        
+        # Combine all edges
+        row = torch.cat([row1, col2, row3])
+        col = torch.cat([col1, row2, col3])
+        
+        edge_index = torch.stack([row, col])
+        return torch_geometric.utils.coalesce(edge_index)
 
+class ResidualBlock3D(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv3d(in_channels, out_channels, 3, stride, 1, bias=False)
+        self.bn1 = nn.BatchNorm3d(out_channels)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, 3, 1, 1, bias=False)
+        self.bn2 = nn.BatchNorm3d(out_channels)
+        
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, 1, stride, bias=False),
+                nn.BatchNorm3d(out_channels)
+            )
+        
+        self.dropout = nn.Dropout3d(0.1)
+        
     def forward(self, x):
-        out = self.left(x)
-        out = out + self.shortcut(x)
-        out = nn.ReLU()(out)
-
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.dropout(out)
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
         return out
 
-class ResNet3D(nn.Module):
-    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256):
-        super(ResNet3D, self).__init__()
-
-        self.instance_norm1 = nn.BatchNorm3d(in_channels)
-
-        self.in_channels = in_channels
-
-        self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=1)
-        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=1)
-
-        self.softmax = nn.functional.softmax
-        self.fc = nn.Linear(in_channels * 4, num_classes)
-
-    def _make_layer(self, block, channels, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_channels, channels, stride))
-            self.in_channels = channels
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.instance_norm1(x)  # (bs, 128, 15, 15, 15)
-
-        x1 = self.layer1(x)  # (bs, 128, 11, 11, 11)
-        x2 = self.layer2(x1)  # (bs, 256, 7, 7, 7 )
-        x3 = self.layer3(x2) # (bs, 512, 3, 3, 3)
-        x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
+class CNN3D(nn.Module):
+    def __init__(self, in_channels, num_classes=20):
+        super().__init__()
         
-        # Changed: squeeze only the spatial dimensions (2, 3, 4), not batch dimension (0)
-        out = x_out.view(x_out.size(0), -1)  # Reshape to (batch_size, features)
+        # Initial convolution
+        self.conv1 = nn.Conv3d(in_channels, 64, 3, 1, 1, bias=False)
+        self.bn1 = nn.BatchNorm3d(64)
+        
+        # Residual blocks
+        self.layer1 = self._make_layer(64, 128, 2, stride=1)
+        self.layer2 = self._make_layer(128, 256, 2, stride=1)
+        self.layer3 = self._make_layer(256, 512, 2, stride=1)
+        
+        # Global average pooling and classifier
+        self.avgpool = nn.AdaptiveAvgPool3d(1)
+        self.fc = nn.Linear(512, num_classes)
+        
+        self.dropout = nn.Dropout(0.5)
+        
+    def _make_layer(self, in_channels, out_channels, num_blocks, stride):
+        layers = []
+        layers.append(ResidualBlock3D(in_channels, out_channels, stride))
+        for _ in range(1, num_blocks):
+            layers.append(ResidualBlock3D(out_channels, out_channels, 1))
+        return nn.Sequential(*layers)
+    
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.avgpool(out)
+        out = out.view(out.size(0), -1)
+        out = self.dropout(out)
         out = self.fc(out)
         return out
 
 class ProteinGrid(nn.Module):
-    def __init__(self, node_types=4, res_types=21, on_bb=2, hidden_features=128, out_features=20, act=nn.SiLU):
+    def __init__(self, node_types=9, res_types=21, on_bb=2, hidden_features=128, out_features=20, act=nn.SiLU):
         super().__init__()
-        self.atom_embedding = nn.Embedding(node_types, node_types)
-        self.res_embedding = nn.Embedding(res_types, res_types)
-        self.on_bb_embedding = nn.Embedding(on_bb, on_bb)
+        
+        # Embeddings
+        self.atom_embedding = nn.Embedding(node_types, 16)
+        self.res_embedding = nn.Embedding(res_types, 32)
+        self.on_bb_embedding = nn.Embedding(on_bb, 8)
+        
+        # Feature projection
+        input_dim = 16 + 32 + 8 + 3 + 2  # embeddings + coords + physical features
         self.feature_embedding = nn.Sequential(
-            nn.Linear(node_types + res_types + on_bb + 3 + 2, hidden_features),
+            nn.Linear(input_dim, hidden_features),
             act(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_features, hidden_features),
         )
         
-        self.equi_layer = equivariant_layer(hidden_features)
-        self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
-
-        self.cnn_model = ResNet3D(
-            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features
+        # Equivariant orientation learning
+        self.equi_layer = LocalEquivariantLayer(hidden_features)
+        
+        # Gridification
+        self.gridification = GridificationLayer(
+            hidden_features=hidden_features,
+            k_atoms_to_grid=5,
+            k_grid_to_atoms=5,
+            radius=4.5
         )
+        
+        # 3D CNN for grid processing
+        self.cnn_model = CNN3D(hidden_features, num_classes=out_features)
+        
         self.hidden_features = hidden_features
+        self.out_features = out_features
 
     def forward(self, batch):
-        batch_size = batch.ptr.shape[0] - 1
-        node_pos = batch.coords.to(torch.float32)
-        grid_pos = batch.grid_coords.to(torch.float32)
-        physical_feats = torch.stack([batch.sasa, batch.charges], dim=-1).to(torch.float32)
-        physical_feats[torch.isinf(physical_feats)] = 0
-        physical_feats[torch.isnan(physical_feats)] = 0
-        atom_types = batch.atom_types.to(torch.long)   
-        atom_on_bb = batch.atom_on_bb.to(torch.long)
-        res_types = batch.res_types.to(torch.long)
-        atom_embedding = self.atom_embedding(atom_types)
-        res_embedding = self.res_embedding(res_types)
-        on_bb_embedding = self.on_bb_embedding(atom_on_bb)
-        atom_feature = self.feature_embedding(
-            torch.cat((atom_embedding, res_embedding, on_bb_embedding, node_pos, physical_feats), dim=-1)
+        # Extract features
+        atom_pos = batch.coords
+        grid_pos = batch.grid_coords
+        atom_batch = batch.batch
+        
+        # Create grid batch indices
+        batch_size = batch.batch.max().item() + 1
+        grid_points_per_sample = batch.num_grid_points[0].item()
+        grid_batch = torch.arange(batch_size, device=atom_pos.device).repeat_interleave(grid_points_per_sample)
+        
+        # Prepare features
+        physical_feats = torch.stack([batch.sasa, batch.charges], dim=-1)
+        physical_feats = torch.nan_to_num(physical_feats, 0.0)
+        
+        # Embeddings
+        atom_emb = self.atom_embedding(batch.atom_types)
+        res_emb = self.res_embedding(batch.res_types)
+        bb_emb = self.on_bb_embedding(batch.atom_on_bb)
+        
+        # Combine features
+        atom_features = self.feature_embedding(
+            torch.cat([atom_emb, res_emb, bb_emb, atom_pos, physical_feats], dim=-1)
         )
         
-        atom_batch = batch.batch[batch.is_atom_mask.bool() == True]  # Get batch assignments for atoms only
-        frame = self.equi_layer(atom_feature, node_pos, atom_batch)
-
-        # Get the number of grid points per sample
-        grid_points_per_sample = batch.grid_size[0]**3
+        # Learn orientations at CA positions
+        ca_indices = batch.ca_idx
+        orientations = self.equi_layer(atom_features, atom_pos, atom_batch, ca_indices)
         
-        # Create batch indices for grid points
-        grid_batch_idx = torch.arange(batch_size, device=grid_pos.device).repeat_interleave(grid_points_per_sample)
+        # Transform grid coordinates using orientations
+        grid_size = batch.grid_size[0].item()
+        transformed_grids = []
         
-        # Since grid_pos contains concatenated grid coordinates from all samples,
-        # we need to select the appropriate grid coordinates for transformation
-        # The first grid_points_per_sample points are the actual grid coordinates
-        grid_coords_single = grid_pos[:grid_points_per_sample]
+        for i in range(batch_size):
+            # Get original grid for this sample
+            start_idx = i * grid_points_per_sample
+            end_idx = (i + 1) * grid_points_per_sample
+            sample_grid = grid_pos[start_idx:end_idx]
+            
+            # Transform using the orientation for this sample
+            R = orientations[i]
+            transformed_grid = torch.matmul(sample_grid, R.T)
+            transformed_grids.append(transformed_grid)
         
-        # Repeat grid coordinates for each sample in the batch
-        grid_pos_batched = grid_coords_single.unsqueeze(0).repeat(batch_size, 1, 1)
+        transformed_grid_pos = torch.cat(transformed_grids, dim=0)
         
-        # Apply frame transformation
-        grid_pos = torch.bmm(grid_pos_batched, frame.permute(0, 2, 1)).reshape(-1, 3)
-
-        row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=atom_batch, batch_y=grid_batch_idx)
-        row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=atom_batch)
-
-        edge_index_knn = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
+        # Gridification
+        grid_features = self.gridification(
+            atom_features, atom_pos, transformed_grid_pos, 
+            atom_batch, grid_batch
         )
-
-        row_1, col_1 = radius(node_pos, grid_pos, r=4, batch_x=atom_batch, batch_y=grid_batch_idx)
-        row_2, col_2 = radius(grid_pos, node_pos, r=4, batch_x=grid_batch_idx, batch_y=atom_batch)
-
-        edge_index_radius = torch.stack(
-            (torch.cat((col_1, row_2)),
-            torch.cat((row_1, col_2)))
-        )
-        edge_index = torch.cat((edge_index_knn, edge_index_radius), dim=-1)
-
-        edge_index = torch_geometric.utils.coalesce(edge_index)
-
-        cnn_input = self.mpnn_layer(atom_feature, node_pos, grid_pos, edge_index)
-        cnn_input = cnn_input.reshape(
-            batch_size, 
-            int(batch.grid_size[0]), int(batch.grid_size[0]), int(batch.grid_size[0]), 
-            self.hidden_features
+        
+        # Reshape for CNN
+        grid_features = grid_features.reshape(
+            batch_size, grid_size, grid_size, grid_size, self.hidden_features
         ).permute(0, 4, 1, 2, 3)
-        preds = self.cnn_model(cnn_input)
-        preds = F.log_softmax(preds, dim=-1)
-        loss = F.cross_entropy(preds, batch.y, reduction='none')
-        pred_labels = torch.max(preds, dim=-1)[1]
+        
+        # CNN processing
+        logits = self.cnn_model(grid_features)
+        log_probs = F.log_softmax(logits, dim=-1)
+        
+        # Compute loss and metrics
+        loss = F.cross_entropy(logits, batch.y, reduction='none')
+        pred_labels = logits.argmax(dim=-1)
         acc = (pred_labels == batch.y).float()
-        backprop_loss = loss.mean()  # []
-
-        correct_counts = torch.zeros(20).to(batch.y.device)
-        correct_counts.scatter_add_(0, batch.y, (pred_labels == batch.y).float())
-        total_counts = torch.zeros(20).to(batch.y.device)
-        total_counts.scatter_add_(0, batch.y, torch.ones_like(batch.y).float())
-        acc_per_class = correct_counts / total_counts
-        log_dict = dict()
-        log_dict["loss"] = loss
-        log_dict["acc"] = acc
-        for i, acc_cls in enumerate(acc_per_class):
-            log_dict[f"acc_{i}"] = torch.ones(batch_size).to(batch.y.device)*acc_cls
-
-        return backprop_loss, log_dict
+        
+        # Per-class accuracy
+        log_dict = {
+            "loss": loss,
+            "acc": acc
+        }
+        
+        # Track per-class performance
+        for i in range(self.out_features):
+            mask = batch.y == i
+            if mask.any():
+                class_acc = (pred_labels[mask] == i).float().mean()
+                log_dict[f"acc_{i}"] = class_acc
+        
+        return loss.mean(), log_dict

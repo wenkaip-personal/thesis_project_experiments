@@ -10,6 +10,7 @@ from atom3d.util import metrics
 from dataset_grid import ProteinDataset
 from model_grid import ProteinGrid
 import os
+import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
@@ -26,6 +27,8 @@ parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
 parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
                     help='learning rate')
+parser.add_argument('--weight-decay', default=1e-4, type=float,
+                    help='weight decay')
 parser.add_argument('--hidden_nf', type=int, default=128,
                     help='number of hidden features')
 parser.add_argument('--grid-size', type=int, default=9,
@@ -38,49 +41,44 @@ parser.add_argument('--split_path', type=str,
                     default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/')
 parser.add_argument('--model_path', type=str, 
                     default='/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_equi_grid/models/')
-# Add debug mode flag
 parser.add_argument('--debug', action='store_true',
                     help='enable debug mode with reduced dataset size and fewer epochs')
 
 args = parser.parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-model_id = float(time.time())
+model_id = int(time.time())
 print = partial(print, flush=True)
 
-# Start a new wandb run to track this script
+# Initialize wandb
 run = wandb.init(
-    # Set the wandb project where this run will be logged
     project="res",
-    # Track hyperparameters and run metadata
     config={
         "learning_rate": args.lr,
+        "weight_decay": args.weight_decay,
         "architecture": "ResEquiGrid",
         "dataset": "RES",
         "epochs": args.epochs,
         "grid_size": args.grid_size,
         "grid_spacing": args.grid_spacing,
+        "batch_size": args.batch,
     },
 )
 
-def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
+def loop(dataloader, model, optimizer=None, scheduler=None, max_time=None, max_batches=None):
     start = time.time()
     t = tqdm.tqdm(dataloader)
-    metrics_funcs = get_metrics()
     total_loss, total_count = 0, 0
-    all_acc = []  # Store accuracy values
+    all_acc = []
+    all_losses = []
 
     batch_count = 0
     for batch in t:
-        # Add max_batches check for debug mode
         if max_batches is not None and batch_count >= max_batches:
             break
         
         if max_time and (time.time() - start) > 60*max_time: 
             break
-        
-        # Start timing this batch
-        batch_start_time = time.time()
             
         if optimizer:
             optimizer.zero_grad()
@@ -94,8 +92,10 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
             print('Skipped batch due to OOM', flush=True)
             continue
         
-        total_loss += float(loss)
+        batch_loss = float(loss)
+        total_loss += batch_loss
         total_count += 1
+        all_losses.append(batch_loss)
         
         # Store batch accuracy
         batch_acc = log_dict['acc'].mean().item()
@@ -104,81 +104,119 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
         if optimizer:
             try:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
+                if scheduler:
+                    scheduler.step()
             except RuntimeError as e:
                 if "CUDA out of memory" not in str(e):
                     raise(e)
                 torch.cuda.empty_cache()
                 print('Skipped batch due to OOM', flush=True)
                 continue
-            
-        # Calculate and print the time taken for this batch
-        batch_time = time.time() - batch_start_time
-        print(f"Batch {batch_count} processing time: {batch_time:.4f} seconds")
         
         batch_count += 1        
-        t.set_description(f"{total_loss/total_count:.8f}")
+        t.set_description(f"Loss: {total_loss/total_count:.4f}, Acc: {batch_acc:.1f}%")
         
         # Log metrics to wandb
         run.log({
             "loss": total_loss / total_count,
-            "accuracy": batch_acc,
-            "batch_time": batch_time
+            "accuracy": batch_acc
         })
         
+    avg_loss = total_loss / total_count if total_count > 0 else float('inf')
     avg_acc = sum(all_acc) / len(all_acc) if all_acc else 0
-    return total_loss / total_count, avg_acc
+    std_acc = np.std(all_acc) if len(all_acc) > 1 else 0
+    
+    return avg_loss, avg_acc, std_acc
 
 def train(model, train_loader, val_loader):
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    best_val_loss, best_path = float('inf'), None
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    
+    # Cosine annealing scheduler
+    total_steps = len(train_loader) * args.epochs
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    
+    best_val_loss = float('inf')
+    best_val_acc = 0
+    best_epoch = 0
+    patience = 50
+    patience_counter = 0
 
     # Determine max batches for debug mode
     train_batches = 10 if args.debug else None
     val_batches = 5 if args.debug else None
 
     for epoch in range(args.epochs):
+        # Training
         model.train()
-        train_loss, train_acc = loop(train_loader, model, optimizer=optimizer, 
-                                     max_time=args.train_time, max_batches=train_batches)
+        train_loss, train_acc, train_std = loop(train_loader, model, optimizer=optimizer, 
+                                               scheduler=scheduler, max_time=args.train_time, 
+                                               max_batches=train_batches)
         
-        path = args.model_path + f'RES_{model_id}_{epoch}.pt'
-        torch.save(model.state_dict(), path)
-        print(f'\nEPOCH {epoch} TRAIN loss: {train_loss:.8f} acc: {train_acc:.2f}%')
-
+        # Validation
         model.eval()
         with torch.no_grad():
-            val_loss, val_acc = loop(val_loader, model, max_time=args.val_time, 
-                                     max_batches=val_batches)
-        print(f'\nEPOCH {epoch} VAL loss: {val_loss:.8f} acc: {val_acc:.2f}%')
+            val_loss, val_acc, val_std = loop(val_loader, model, max_time=args.val_time, 
+                                             max_batches=val_batches)
         
+        # Save checkpoint
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'train_acc': train_acc,
+            'val_acc': val_acc,
+        }
+        
+        path = os.path.join(args.model_path, f'RES_{model_id}_epoch_{epoch}.pt')
+        torch.save(checkpoint, path)
+        
+        # Track best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_val_acc = val_acc
+            best_epoch = epoch
             best_path = path
-        print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
+            patience_counter = 0
+        else:
+            patience_counter += 1
+        
+        print(f'\nEPOCH {epoch}:')
+        print(f'  TRAIN - Loss: {train_loss:.4f}, Acc: {train_acc:.1f}% (±{train_std:.1f}%)')
+        print(f'  VAL   - Loss: {val_loss:.4f}, Acc: {val_acc:.1f}% (±{val_std:.1f}%)')
+        print(f'  BEST  - Epoch: {best_epoch}, Loss: {best_val_loss:.4f}, Acc: {best_val_acc:.1f}%')
 
-        # Log metrics to wandb
+        # Log epoch metrics
         run.log({
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,
-            "val_acc": val_acc,
-            "epoch": epoch
+            "val_acc": val_acc
         })
+        
+        # Early stopping
+        if patience_counter >= patience:
+            print(f"Early stopping triggered after {patience} epochs without improvement")
+            break
 
-def test(model, test_loader):
-    model.load_state_dict(torch.load(args.test))
+def test(model, test_loader, checkpoint_path):
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
-    # Determine max batches for debug mode
     test_batches = 5 if args.debug else None
     
     with torch.no_grad():
-        test_loss, test_acc = loop(test_loader, model, max_batches=test_batches)
+        test_loss, test_acc, test_std = loop(test_loader, model, max_batches=test_batches)
     
-    print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
+    print(f'\nTEST Results:')
+    print(f'  Loss: {test_loss:.4f}')
+    print(f'  Acc:  {test_acc:.1f}% (±{test_std:.1f}%)')
 
-    # Log metrics to wandb
     run.log({
         "test_loss": test_loss,
         "test_acc": test_acc
@@ -188,14 +226,15 @@ def forward(model, batch, device):
     batch = batch.to(device)
     return model(batch)
 
-def get_metrics():
-    return {'accuracy': metrics.accuracy}
-
 def main():
+    # Create model directory if it doesn't exist
+    os.makedirs(args.model_path, exist_ok=True)
+    
     # Adjust parameters for debug mode
     if args.debug:
         print("Running in DEBUG mode")
-        max_samples = 100  # Limit dataset size
+        max_samples = 100
+        args.epochs = 50
     else:
         max_samples = None
 
@@ -213,21 +252,25 @@ def main():
     val_loader = dataset.val_loader()
     test_loader = dataset.test_loader()
 
-    # Initialize model with correct dimensions
+    # Initialize model
     model = ProteinGrid(
-        node_types=9,  # Number of atom types
-        res_types=21,  # Number of residue types
-        on_bb=2,      # On backbone indicator
+        node_types=9,
+        res_types=21,
+        on_bb=2,
         hidden_features=args.hidden_nf,
-        out_features=20,  # Number of amino acid classes
+        out_features=20,
     ).to(device)
+    
+    # Print model info
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
 
     if args.test:
-        test(model, test_loader)
+        test(model, test_loader, args.test)
     else:
         train(model, train_loader, val_loader)
 
 if __name__ == "__main__":
     main()
-    # Finish the run and upload any remaining data
     run.finish()
