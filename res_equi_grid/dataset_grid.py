@@ -174,7 +174,7 @@ class Protein:
         
         # Extract coordinates and center at CA
         coords = torch.tensor(my_atoms[['x', 'y', 'z']].values, dtype=torch.float32)
-        ca_coord = coords[int(ca_idx)]
+        ca_coord = coords[ca_idx[0]]  # Changed: extract first element from array
         coords = coords - ca_coord
         
         # Get atom features
@@ -204,7 +204,7 @@ class Protein:
         grid_data.sasa = sasa
         grid_data.charges = charges
         grid_data.y = torch.tensor(aa, dtype=torch.long)
-        grid_data.ca_idx = torch.tensor(int(ca_idx), dtype=torch.long)
+        grid_data.ca_idx = torch.tensor(ca_idx[0], dtype=torch.long)  # Changed: extract first element
         grid_data.num_atoms = coords.size(0)
         grid_data.num_grid_points = self.grid_coords.size(0)
         grid_data.grid_size = self.size
