@@ -219,9 +219,15 @@ class ProteinGrid(nn.Module):
         grid_pos = batch.grid_coords
         atom_batch = batch.batch
         
+        # Handle case where batch attribute might be None (single sample)
+        if atom_batch is None:
+            batch_size = 1
+            atom_batch = torch.zeros(atom_pos.size(0), dtype=torch.long, device=atom_pos.device)
+        else:
+            batch_size = atom_batch.max().item() + 1
+        
         # Create grid batch indices
-        batch_size = batch.batch.max().item() + 1
-        grid_points_per_sample = batch.num_grid_points[0].item()
+        grid_points_per_sample = batch.num_grid_points[0].item() if hasattr(batch.num_grid_points, 'item') else batch.num_grid_points
         grid_batch = torch.arange(batch_size, device=atom_pos.device).repeat_interleave(grid_points_per_sample)
         
         # Prepare features
