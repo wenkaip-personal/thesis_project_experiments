@@ -244,6 +244,17 @@ class ProteinGrid(nn.Module):
             torch.cat([atom_emb, res_emb, bb_emb, atom_pos, physical_feats], dim=-1)
         )
         
+        # Fix: Properly offset CA indices for batched data
+        ca_indices = []
+        atom_offset = 0
+        for i in range(batch_size):
+            mask = atom_batch == i
+            sample_size = mask.sum().item()
+            ca_idx_local = batch.ca_idx[i].item()
+            ca_indices.append(atom_offset + ca_idx_local)
+            atom_offset += sample_size
+        ca_indices = torch.tensor(ca_indices, device=atom_pos.device, dtype=torch.long)
+        
         # Learn orientations at CA positions
         ca_indices = batch.ca_idx
         orientations = self.equi_layer(atom_features, atom_pos, atom_batch, ca_indices)
