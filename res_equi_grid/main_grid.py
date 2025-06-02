@@ -20,7 +20,7 @@ parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
 parser.add_argument('--val-time', metavar='MINUTES', type=int, default=20,
                     help='maximum time per evaluation on valset')
-parser.add_argument('--epochs', metavar='N', type=int, default=1000,
+parser.add_argument('--epochs', metavar='N', type=int, default=100,
                     help='training epochs')
 parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
@@ -196,6 +196,7 @@ def main():
     if args.debug:
         print("Running in DEBUG mode")
         max_samples = 100  # Limit dataset size
+        args.epochs = 50
     else:
         max_samples = None
 

@@ -273,22 +273,19 @@ class ProteinDataset:
         split = "train"
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.train_dataset) if distributed else None)
-        shuffle = True if split == 'train' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)
+        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)
 
     def val_loader(self):
         split = "valid"
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.valid_dataset) if distributed else None)
-        shuffle = True if split == 'valid' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)     
+        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)     
 
     def test_loader(self):
         split = "test"
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.test_dataset) if distributed else None)
-        shuffle = True if split == 'test' and not distributed else False
         drop_last = split == 'train'
-        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, shuffle=shuffle, num_workers=4)
+        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)
