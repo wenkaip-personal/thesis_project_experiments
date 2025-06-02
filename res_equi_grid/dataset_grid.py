@@ -13,6 +13,7 @@ from atom3d.datasets import LMDBDataset
 import numpy as np
 import random
 import math
+from torch.utils.data import IterableDataset
 
 # Element and amino acid mappings from dataset.py
 _element_mapping = lambda x: {
@@ -64,7 +65,7 @@ class GridData(Data):
         else:
             return 0
 
-class Protein:
+class Protein(IterableDataset):
     """
     Protein Dataset based on ATOM3D RES dataset
     """
@@ -79,9 +80,6 @@ class Protein:
         
         if max_samples is not None:
             self.idx = self.idx[:max_samples]
-        else:
-            # Filter out invalid samples
-            self.idx = self._filter_valid_samples(self.idx)
             
         self.knn = knn
         self.radius = radius
@@ -89,38 +87,73 @@ class Protein:
         self.grid_coords = self.generate_grid(n=size, spacing=spacing)
         self.size = size
         self.radius_table = torch.tensor([1.7, 1.45, 1.37, 1.7])
-        
-        print(f"Loaded {len(self.idx)} valid samples from dataset")
 
-    def _filter_valid_samples(self, indices):
-        """Filter out samples that don't have valid subunits"""
-        valid_indices = []
-        
-        for idx in tqdm(indices, desc="Filtering valid samples"):
-            if self._is_valid_sample(idx):
-                valid_indices.append(idx)
-        
-        return valid_indices
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            gen = self._dataset_generator(list(range(len(self.idx))), shuffle=True)
+        else:
+            per_worker = int(math.ceil(len(self.idx) / float(worker_info.num_workers)))
+            worker_id = worker_info.id
+            iter_start = worker_id * per_worker
+            iter_end = min(iter_start + per_worker, len(self.idx))
+            gen = self._dataset_generator(list(range(len(self.idx)))[iter_start:iter_end], shuffle=True)
+        return gen
     
-    def _is_valid_sample(self, idx):
-        """Check if a sample has at least one valid subunit"""
-        try:
-            data = self.dataset[idx]
+    def _dataset_generator(self, indices, shuffle=True):
+        if shuffle: 
+            random.shuffle(indices)
+            
+        for idx in indices:
+            data = self.dataset[self.idx[idx]]
             atoms = data['atoms']
             
             for sub in data['labels'].itertuples():
                 _, num, aa = sub.subunit.split('_')
                 num, aa = int(num), _amino_acids(aa)
-                if aa == 20: continue  # Skip unknown amino acids
+                if aa == 20: continue
                 
                 my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
                 ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
-                if len(ca_idx) == 1:
-                    return True
-            
-            return False
-        except Exception:
-            return False
+                if len(ca_idx) != 1: continue
+                
+                # Create grid data for this subunit
+                grid_data = GridData()
+                
+                coords = torch.tensor(my_atoms[['x', 'y', 'z']].values, dtype=torch.float64)
+                ca_coord = coords[int(ca_idx)]
+                coords = coords - ca_coord
+                
+                atom_types = torch.tensor([_element_mapping(e) for e in my_atoms.element], dtype=torch.long)
+                
+                res_types = []
+                for idx, (res_num, res_name) in enumerate(zip(my_atoms.residue, my_atoms.resname)):
+                    if res_num == num:
+                        res_types.append(20)
+                    else:
+                        res_types.append(_amino_acids(res_name))
+                res_types = torch.tensor(res_types, dtype=torch.long)
+                
+                atom_on_bb = torch.tensor([(n in ['N', 'CA', 'C', 'O']) for n in my_atoms.name], dtype=torch.long)
+                sasa = torch.zeros(len(my_atoms), dtype=torch.float32)
+                charges = torch.zeros(len(my_atoms), dtype=torch.float32)
+                
+                grid_data.coords = coords
+                grid_data.grid_coords = self.grid_coords
+                grid_data.atom_types = atom_types
+                grid_data.res_types = res_types
+                grid_data.atom_on_bb = atom_on_bb
+                grid_data.sasa = sasa
+                grid_data.charges = charges
+                grid_data.y = torch.tensor(aa, dtype=torch.long)
+                grid_data.cb_index = torch.tensor(int(ca_idx), dtype=torch.long)
+                grid_data.grid_size = self.size
+                grid_data.num_nodes = self.grid_coords.size(0) + coords.size(0)
+                grid_data.num_atoms = coords.size(0)
+                grid_data.num_grid_points = self.grid_coords.size(0)
+                grid_data.is_atom_mask = torch.cat((torch.ones(coords.size(0)), torch.zeros(self.grid_coords.size(0))))
+                
+                yield grid_data
 
     def generate_grid(self, n, spacing=1):
         """
@@ -135,77 +168,12 @@ class Protein:
         """
         start = -spacing
         end = spacing
-        # Create evenly spaced coordinates within the given range
         coords = torch.linspace(start, end, n)
         
         xx, yy, zz = torch.meshgrid(coords, coords, coords, indexing='ij')
         
         grid_coordinates = torch.stack((xx.flatten(), yy.flatten(), zz.flatten()), dim=1)
         return grid_coordinates.to(torch.float64)
-    
-    def __getitem__(self, i):
-        data = self.dataset[self.idx[i]]
-        atoms = data['atoms']
-        
-        # Process for one subunit in data['labels']
-        for sub in data['labels'].itertuples():
-            _, num, aa = sub.subunit.split('_')
-            num, aa = int(num), _amino_acids(aa)
-            if aa == 20: continue  # Skip unknown amino acids
-            
-            # Get atoms for this subunit
-            my_atoms = atoms.iloc[data['subunit_indices'][sub.Index]].reset_index(drop=True)
-            ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
-            if len(ca_idx) != 1: continue
-            
-            # Create a Data object to store the protein information
-            grid_data = GridData()
-            
-            # Extract coordinates and prepare them for the grid
-            coords = torch.tensor(my_atoms[['x', 'y', 'z']].values, dtype=torch.float64)
-            ca_coord = coords[int(ca_idx)]
-            coords = coords - ca_coord  # Center at CA
-            
-            # Get atom features
-            atom_types = torch.tensor([_element_mapping(e) for e in my_atoms.element], dtype=torch.long)
-            
-            # FIXED: Mask residue types for the central residue
-            res_types = []
-            for idx, (res_num, res_name) in enumerate(zip(my_atoms.residue, my_atoms.resname)):
-                if res_num == num:  # This atom belongs to the central residue
-                    res_types.append(20)  # Use 'unknown' type to mask the target
-                else:
-                    res_types.append(_amino_acids(res_name))
-            res_types = torch.tensor(res_types, dtype=torch.long)
-            
-            atom_on_bb = torch.tensor([(n in ['N', 'CA', 'C', 'O']) for n in my_atoms.name], dtype=torch.long)
-            
-            # Physical features (placeholder values, replace with actual values if available)
-            sasa = torch.zeros(len(my_atoms), dtype=torch.float32)
-            charges = torch.zeros(len(my_atoms), dtype=torch.float32)
-            
-            # Add to grid data
-            grid_data.coords = coords
-            grid_data.grid_coords = self.grid_coords
-            grid_data.atom_types = atom_types
-            grid_data.res_types = res_types
-            grid_data.atom_on_bb = atom_on_bb
-            grid_data.sasa = sasa
-            grid_data.charges = charges
-            grid_data.y = torch.tensor(aa, dtype=torch.long)  # Target label
-            grid_data.cb_index = torch.tensor(int(ca_idx), dtype=torch.long)  # CA index
-            grid_data.grid_size = self.size
-
-            # Explicit node counts for atoms and grid points
-            grid_data.num_nodes = self.grid_coords.size(0) + coords.size(0)
-            grid_data.num_atoms = coords.size(0)  # Number of atoms
-            grid_data.num_grid_points = self.grid_coords.size(0)  # Number of grid points
-            grid_data.is_atom_mask = torch.cat((torch.ones(coords.size(0)), torch.zeros(self.grid_coords.size(0))))
-            
-            return grid_data
-
-    def __len__(self):
-        return len(self.idx)
 
 class ProteinInMemoryDataset(InMemoryDataset):
     def __init__(
