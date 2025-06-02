@@ -69,33 +69,39 @@ class Protein:
     Protein Dataset based on ATOM3D RES dataset
     """
 
-    def __init__(self, lmdb_path, split_path=None, radius=4.5, k=2, knn=True, size=9, spacing=8, max_samples=None):
+    def __init__(self, lmdb_path, split_path=None, radius=4.5, k=2, knn=True, size=9, spacing=8, max_samples=None, debug=False):
         self.dataset = LMDBDataset(lmdb_path)
         
         if split_path is not None:
             self.idx = list(map(int, open(split_path).read().split()))
         else:
             self.idx = list(range(len(self.dataset)))
+        
+        # Skip validation in debug mode
+        if debug:
+            # Simply use first max_samples indices with single subunit per protein
+            debug_indices = self.idx[:min(max_samples or 100, len(self.idx))]
+            self.flat_samples = [(idx, 0) for idx in debug_indices]
+        else:
+            # Build a mapping of valid samples to their subunits
+            self.valid_samples = self._build_valid_samples(self.idx)
             
-        # Build a mapping of valid samples to their subunits
-        self.valid_samples = self._build_valid_samples(self.idx)
-        
-        if max_samples is not None:
-            # Limit the total number of samples
-            total_samples = sum(len(subunits) for subunits in self.valid_samples.values())
-            if total_samples > max_samples:
-                # Proportionally reduce samples
-                fraction = max_samples / total_samples
-                for idx in list(self.valid_samples.keys()):
-                    n_subunits = len(self.valid_samples[idx])
-                    n_keep = max(1, int(n_subunits * fraction))
-                    self.valid_samples[idx] = self.valid_samples[idx][:n_keep]
-        
-        # Flatten the valid samples for indexing
-        self.flat_samples = []
-        for idx, subunit_indices in self.valid_samples.items():
-            for sub_idx in subunit_indices:
-                self.flat_samples.append((idx, sub_idx))
+            if max_samples is not None:
+                # Limit the total number of samples
+                total_samples = sum(len(subunits) for subunits in self.valid_samples.values())
+                if total_samples > max_samples:
+                    # Proportionally reduce samples
+                    fraction = max_samples / total_samples
+                    for idx in list(self.valid_samples.keys()):
+                        n_subunits = len(self.valid_samples[idx])
+                        n_keep = max(1, int(n_subunits * fraction))
+                        self.valid_samples[idx] = self.valid_samples[idx][:n_keep]
+            
+            # Flatten the valid samples for indexing
+            self.flat_samples = []
+            for idx, subunit_indices in self.valid_samples.items():
+                for sub_idx in subunit_indices:
+                    self.flat_samples.append((idx, sub_idx))
                 
         self.knn = knn
         self.radius = radius
@@ -104,7 +110,7 @@ class Protein:
         self.size = size
         self.spacing = spacing
         
-        print(f"Loaded {len(self.flat_samples)} valid samples from dataset")
+        print(f"Loaded {len(self.flat_samples)} valid samples from dataset" + (" (DEBUG MODE)" if debug else ""))
 
     def _build_valid_samples(self, indices):
         """Build a mapping of dataset indices to their valid subunit indices"""
@@ -209,7 +215,7 @@ class Protein:
         return len(self.flat_samples)
 
 class ProteinDataset:
-    def __init__(self, lmdb_path, split_path_root, batch_size=100, knn=True, radius=2, k=3, size=9, spacing=8, max_samples=None):
+    def __init__(self, lmdb_path, split_path_root, batch_size=100, knn=True, radius=2, k=3, size=9, spacing=8, max_samples=None, debug=False):
         torch_geometric.seed.seed_everything(0)
         self.batch_size = batch_size
  
@@ -221,7 +227,8 @@ class ProteinDataset:
             k=k,
             size=size,
             spacing=spacing,
-            max_samples=max_samples
+            max_samples=max_samples,
+            debug=debug
         )
         self.test_dataset = Protein(
             lmdb_path=lmdb_path,
@@ -231,7 +238,8 @@ class ProteinDataset:
             k=k,
             size=size,
             spacing=spacing,
-            max_samples=max_samples
+            max_samples=max_samples,
+            debug=debug
         )
         self.valid_dataset = Protein(
             lmdb_path=lmdb_path,
@@ -241,7 +249,8 @@ class ProteinDataset:
             k=k,
             size=size,
             spacing=spacing,
-            max_samples=max_samples
+            max_samples=max_samples,
+            debug=debug
         )
     
     def train_loader(self):

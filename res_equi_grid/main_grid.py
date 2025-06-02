@@ -245,7 +245,8 @@ def main():
         batch_size=args.batch,
         size=args.grid_size,
         spacing=args.grid_spacing,
-        max_samples=max_samples
+        max_samples=max_samples,
+        debug=args.debug
     )
 
     train_loader = dataset.train_loader()
