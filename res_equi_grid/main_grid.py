@@ -20,7 +20,7 @@ parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
 parser.add_argument('--val-time', metavar='MINUTES', type=int, default=20,
                     help='maximum time per evaluation on valset')
-parser.add_argument('--epochs', metavar='N', type=int, default=100,
+parser.add_argument('--epochs', metavar='N', type=int, default=50,
                     help='training epochs')
 parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
@@ -162,8 +162,7 @@ def train(model, train_loader, val_loader):
             "train_loss": train_loss,
             "train_acc": train_acc,
             "val_loss": val_loss,
-            "val_acc": val_acc,
-            "epoch": epoch
+            "val_acc": val_acc
         })
 
 def test(model, test_loader):
