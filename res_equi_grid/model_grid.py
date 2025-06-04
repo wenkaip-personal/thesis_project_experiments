@@ -110,12 +110,12 @@ class Block(nn.Module):
         return out
 
 class ResNet3D(nn.Module):
-    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256, dropout: float = 0.3):
         super(ResNet3D, self).__init__()
 
         self.instance_norm1 = nn.BatchNorm3d(in_channels)
-
         self.in_channels = in_channels
+        self.dropout = nn.Dropout(dropout)  # Add dropout layer
 
         self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
         self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=1)
@@ -133,15 +133,20 @@ class ResNet3D(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.instance_norm1(x)  # (bs, 128, 15, 15, 15)
+        x = self.instance_norm1(x)
 
-        x1 = self.layer1(x)  # (bs, 128, 11, 11, 11)
-        x2 = self.layer2(x1)  # (bs, 256, 7, 7, 7 )
-        x3 = self.layer3(x2) # (bs, 512, 3, 3, 3)
+        x1 = self.layer1(x)
+        x1 = self.dropout(x1)  # Apply dropout after layer1
+        
+        x2 = self.layer2(x1)
+        x2 = self.dropout(x2)  # Apply dropout after layer2
+        
+        x3 = self.layer3(x2)
+        x3 = self.dropout(x3)  # Apply dropout after layer3
+        
         x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
         
-        # Changed: squeeze only the spatial dimensions (2, 3, 4), not batch dimension (0)
-        out = x_out.view(x_out.size(0), -1)  # Reshape to (batch_size, features)
+        out = x_out.view(x_out.size(0), -1)
         out = self.fc(out)
         return out
 
@@ -161,7 +166,8 @@ class ProteinGrid(nn.Module):
         self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
 
         self.cnn_model = ResNet3D(
-            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features
+            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features,
+            dropout=0.3  # Add dropout parameter
         )
         self.hidden_features = hidden_features
 
