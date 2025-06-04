@@ -26,7 +26,7 @@ parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
 parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
                     help='learning rate')
-parser.add_argument('--hidden_nf', type=int, default=128,
+parser.add_argument('--hidden_nf', type=int, default=64,
                     help='number of hidden features')
 parser.add_argument('--grid-size', type=int, default=9,
                     help='size of the grid for gridification')
