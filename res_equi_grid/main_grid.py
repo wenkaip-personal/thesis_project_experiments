@@ -130,7 +130,7 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
     return total_loss / total_count, avg_acc
 
 def train(model, train_loader, val_loader):
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)  # Added weight_decay
     best_val_loss, best_path = float('inf'), None
 
     # Determine max batches for debug mode

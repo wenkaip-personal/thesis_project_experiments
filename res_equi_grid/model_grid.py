@@ -110,19 +110,20 @@ class Block(nn.Module):
         return out
 
 class ResNet3D(nn.Module):
-    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256, dropout: float = 0.3):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256, dropout: float = 0.5):
         super(ResNet3D, self).__init__()
 
         self.instance_norm1 = nn.BatchNorm3d(in_channels)
         self.in_channels = in_channels
-        self.dropout = nn.Dropout(dropout)  # Add dropout layer
+        self.dropout = nn.Dropout(dropout)
 
+        # Keep channels constant instead of expanding
         self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=1)
-        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=1)
+        self.layer2 = self._make_layer(block, in_channels, layers[1], stride=1)  # Changed from in_channels * 2
+        self.layer3 = self._make_layer(block, in_channels, layers[2], stride=1)  # Changed from in_channels * 4
 
         self.softmax = nn.functional.softmax
-        self.fc = nn.Linear(in_channels * 4, num_classes)
+        self.fc = nn.Linear(in_channels, num_classes)  # Changed from in_channels * 4
 
     def _make_layer(self, block, channels, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -136,13 +137,13 @@ class ResNet3D(nn.Module):
         x = self.instance_norm1(x)
 
         x1 = self.layer1(x)
-        x1 = self.dropout(x1)  # Apply dropout after layer1
+        x1 = self.dropout(x1)
         
         x2 = self.layer2(x1)
-        x2 = self.dropout(x2)  # Apply dropout after layer2
+        x2 = self.dropout(x2)
         
         x3 = self.layer3(x2)
-        x3 = self.dropout(x3)  # Apply dropout after layer3
+        x3 = self.dropout(x3)
         
         x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
         
@@ -167,7 +168,7 @@ class ProteinGrid(nn.Module):
 
         self.cnn_model = ResNet3D(
             block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features,
-            dropout=0.3  # Add dropout parameter
+            dropout=0.5  # Add dropout parameter
         )
         self.hidden_features = hidden_features
 
