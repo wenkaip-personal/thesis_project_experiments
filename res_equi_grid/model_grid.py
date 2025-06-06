@@ -87,24 +87,69 @@ class MPNNLayer(nn.Module):
 
         return update
 
-class SimpleCNN3D(nn.Module):
-    def __init__(self, in_channels: int = 256, num_classes: int = 20, dropout: float = 0.5):
-        super(SimpleCNN3D, self).__init__()
-        
-        self.conv1 = nn.Conv3d(in_channels, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv3d(64, 32, kernel_size=3, padding=1)
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(32, num_classes)
-        
+class Block(nn.Module):
+    def __init__(self, in_channel, out_channel, stride=1):
+        super(Block, self).__init__()
+        self.left = nn.Sequential(
+            nn.Conv3d(in_channel, out_channel, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm3d(out_channel),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(out_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm3d(out_channel)
+        )
+        self.shortcut = nn.Sequential(
+            nn.Conv3d(in_channel, out_channel, kernel_size=5, stride=stride, padding=2, bias=False),
+            nn.BatchNorm3d(out_channel)
+        )
+
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool3d(x, 2)
-        x = F.relu(self.conv2(x))
-        x = F.adaptive_avg_pool3d(x, 1)
-        x = x.view(x.size(0), -1)
-        x = self.dropout(x)
-        x = self.fc(x)
-        return x
+        out = self.left(x)
+        out = out + self.shortcut(x)
+        out = nn.ReLU()(out)
+
+        return out
+
+class ResNet3D(nn.Module):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256, dropout: float = 0.5):
+        super(ResNet3D, self).__init__()
+
+        self.instance_norm1 = nn.BatchNorm3d(in_channels)
+        self.in_channels = in_channels
+        self.dropout = nn.Dropout(dropout)
+
+        # Keep channels constant instead of expanding
+        self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
+        self.layer2 = self._make_layer(block, in_channels, layers[1], stride=1)  # Changed from in_channels * 2
+        self.layer3 = self._make_layer(block, in_channels, layers[2], stride=1)  # Changed from in_channels * 4
+
+        self.softmax = nn.functional.softmax
+        self.fc = nn.Linear(in_channels, num_classes)  # Changed from in_channels * 4
+
+    def _make_layer(self, block, channels, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_channels, channels, stride))
+            self.in_channels = channels
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.instance_norm1(x)
+
+        x1 = self.layer1(x)
+        x1 = self.dropout(x1)
+        
+        x2 = self.layer2(x1)
+        x2 = self.dropout(x2)
+        
+        x3 = self.layer3(x2)
+        x3 = self.dropout(x3)
+        
+        x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
+        
+        out = x_out.view(x_out.size(0), -1)
+        out = self.fc(out)
+        return out
 
 class ProteinGrid(nn.Module):
     def __init__(self, node_types=4, res_types=21, on_bb=2, hidden_features=128, out_features=20, act=nn.SiLU):
@@ -121,10 +166,9 @@ class ProteinGrid(nn.Module):
         self.equi_layer = equivariant_layer(hidden_features)
         self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
 
-        self.cnn_model = SimpleCNN3D(
-            in_channels=hidden_features, 
-            num_classes=out_features,
-            dropout=0.5
+        self.cnn_model = ResNet3D(
+            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features,
+            dropout=0.5  # Add dropout parameter
         )
         self.hidden_features = hidden_features
 
