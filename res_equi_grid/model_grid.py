@@ -21,13 +21,41 @@ class equivariant_layer(nn.Module):
         self.p = 5
 
     def forward(self, x, pos, batch):
+        # Use local neighborhood around each residue instead of global graph
         edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
         dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
         vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
-        vec1_out, vec2_out = global_add_pool(vec1, edge_index[0]), global_add_pool(vec2, edge_index[0])
-        vec1_out = global_mean_pool(vec1_out, batch)
-        vec2_out = global_mean_pool(vec2_out, batch)
-        return self.gram_schmidt_batch(vec1_out, vec2_out)
+        
+        # Aggregate only within local neighborhoods instead of globally
+        # Use the center atom (CA) of each sample as reference
+        batch_size = batch.max().item() + 1
+        frames = []
+        
+        for b in range(batch_size):
+            mask = batch == b
+            if mask.sum() == 0:
+                continue
+                
+            # Find edges for this batch
+            edge_mask = mask[edge_index[0]] & mask[edge_index[1]]
+            
+            # Get local aggregation for the center region only
+            center_idx = mask.nonzero().squeeze()[0]  # Use first atom as reference
+            local_mask = edge_index[1] == center_idx
+            combined_mask = edge_mask & local_mask
+            
+            if combined_mask.sum() > 0:
+                v1_local = vec1[combined_mask].mean(dim=0)
+                v2_local = vec2[combined_mask].mean(dim=0)
+            else:
+                # Fallback to a small local region
+                v1_local = vec1[edge_mask][:10].mean(dim=0)
+                v2_local = vec2[edge_mask][:10].mean(dim=0)
+                
+            frame = self.gram_schmidt_batch(v1_local.unsqueeze(0), v2_local.unsqueeze(0))
+            frames.append(frame)
+        
+        return torch.cat(frames, dim=0)
 
     def gram_schmidt_batch(self, v1, v2):
         n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
