@@ -49,19 +49,19 @@ model_id = float(time.time())
 print = partial(print, flush=True)
 
 # Start a new wandb run to track this script
-run = wandb.init(
-    # Set the wandb project where this run will be logged
-    project="res",
-    # Track hyperparameters and run metadata
-    config={
-        "learning_rate": args.lr,
-        "architecture": "ResEquiGrid",
-        "dataset": "RES",
-        "epochs": args.epochs,
-        "grid_size": args.grid_size,
-        "grid_spacing": args.grid_spacing,
-    },
-)
+# run = wandb.init(
+#     # Set the wandb project where this run will be logged
+#     project="res",
+#     # Track hyperparameters and run metadata
+#     config={
+#         "learning_rate": args.lr,
+#         "architecture": "ResEquiGrid",
+#         "dataset": "RES",
+#         "epochs": args.epochs,
+#         "grid_size": args.grid_size,
+#         "grid_spacing": args.grid_spacing,
+#     },
+# )
 
 def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
     start = time.time()
@@ -120,11 +120,11 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
         t.set_description(f"{total_loss/total_count:.8f}")
         
         # Log metrics to wandb
-        run.log({
-            "loss": total_loss / total_count,
-            "accuracy": batch_acc,
-            "batch_time": batch_time
-        })
+        # run.log({
+        #     "loss": total_loss / total_count,
+        #     "accuracy": batch_acc,
+        #     "batch_time": batch_time
+        # })
         
     avg_acc = sum(all_acc) / len(all_acc) if all_acc else 0
     return total_loss / total_count, avg_acc
@@ -158,12 +158,12 @@ def train(model, train_loader, val_loader):
         print(f'BEST {best_path} VAL loss: {best_val_loss:.8f}')
 
         # Log metrics to wandb
-        run.log({
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "val_loss": val_loss,
-            "val_acc": val_acc
-        })
+        # run.log({
+        #     "train_loss": train_loss,
+        #     "train_acc": train_acc,
+        #     "val_loss": val_loss,
+        #     "val_acc": val_acc
+        # })
 
 def test(model, test_loader):
     model.load_state_dict(torch.load(args.test))
@@ -178,10 +178,10 @@ def test(model, test_loader):
     print(f'\nTEST loss: {test_loss:.8f} acc: {test_acc:.2f}%')
 
     # Log metrics to wandb
-    run.log({
-        "test_loss": test_loss,
-        "test_acc": test_acc
-    })
+    # run.log({
+    #     "test_loss": test_loss,
+    #     "test_acc": test_acc
+    # })
 
 def forward(model, batch, device):
     batch = batch.to(device)
@@ -230,4 +230,4 @@ def main():
 if __name__ == "__main__":
     main()
     # Finish the run and upload any remaining data
-    run.finish()
+    # run.finish()
