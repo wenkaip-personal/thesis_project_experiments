@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import tqdm
 import time
-import torch_geometric
+# import torch_geometric
 from functools import partial
 from atom3d.util import metrics
 from dataset_grid import ProteinDataset
@@ -14,7 +14,7 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-workers', metavar='N', type=int, default=4,
                     help='number of threads for loading data')
-parser.add_argument('--batch', metavar='SIZE', type=int, default=8,
+parser.add_argument('--batch', metavar='SIZE', type=int, default=1024,
                     help='batch size')
 parser.add_argument('--train-time', metavar='MINUTES', type=int, default=120,
                     help='maximum time per training on trainset')
@@ -24,20 +24,20 @@ parser.add_argument('--epochs', metavar='N', type=int, default=50,
                     help='training epochs')
 parser.add_argument('--test', metavar='PATH', default=None,
                     help='evaluate a trained model')
-parser.add_argument('--lr', metavar='RATE', default=1e-4, type=float,
+parser.add_argument('--lr', metavar='RATE', default=1e-3, type=float,
                     help='learning rate')
-parser.add_argument('--hidden_nf', type=int, default=64,
+parser.add_argument('--hidden_nf', type=int, default=128,
                     help='number of hidden features')
-parser.add_argument('--grid-size', type=int, default=9,
+parser.add_argument('--grid-size', type=int, default=5,
                     help='size of the grid for gridification')
-parser.add_argument('--grid-spacing', type=int, default=8, 
+parser.add_argument('--grid-spacing', type=int, default=4, 
                     help='spacing of the grid points')
 parser.add_argument('--data_path', type=str, 
-                    default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/raw/RES/data/')
+                    default='./raw/RES/data/')
 parser.add_argument('--split_path', type=str, 
-                    default='/content/drive/MyDrive/thesis_project/atom3d_res_dataset/indices/')
+                    default='./indices/')
 parser.add_argument('--model_path', type=str, 
-                    default='/content/drive/MyDrive/thesis_project/thesis_project_experiments/res_equi_grid/models/')
+                    default='./thesis_project_experiments/res_equi_grid/models/')
 # Add debug mode flag
 parser.add_argument('--debug', action='store_true',
                     help='enable debug mode with reduced dataset size and fewer epochs')
@@ -130,7 +130,7 @@ def loop(dataloader, model, optimizer=None, max_time=None, max_batches=None):
     return total_loss / total_count, avg_acc
 
 def train(model, train_loader, val_loader):
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)  # Added weight_decay
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     best_val_loss, best_path = float('inf'), None
 
     # Determine max batches for debug mode

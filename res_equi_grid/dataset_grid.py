@@ -70,7 +70,7 @@ class Protein(IterableDataset):
     Protein Dataset based on ATOM3D RES dataset
     """
 
-    def __init__(self, lmdb_path, split_path=None, radius=4.5, k=2, knn=True, size=9, spacing=8, max_samples=None):
+    def __init__(self, lmdb_path, split_path=None, radius=4.5, k=2, knn=True, size=5, spacing=2, max_samples=None):
         self.dataset = LMDBDataset(lmdb_path)
         
         if split_path is not None:
@@ -117,12 +117,49 @@ class Protein(IterableDataset):
                 ca_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'CA'))[0]
                 if len(ca_idx) != 1: continue
                 
+                # 获取中心氨基酸的C、N、Calpha原子坐标
+                c_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'C'))[0]
+                n_idx = np.where((my_atoms.residue == num) & (my_atoms.name == 'N'))[0]
+                
+                # 确保能找到所有三个原子
+                if len(c_idx) != 1 or len(n_idx) != 1:
+                    continue
+                    
+                # 获取三个原子的坐标
+                ca_coord = my_atoms.iloc[int(ca_idx)][['x', 'y', 'z']].values
+                c_coord = my_atoms.iloc[int(c_idx)][['x', 'y', 'z']].values
+                n_coord = my_atoms.iloc[int(n_idx)][['x', 'y', 'z']].values
+                # 计算局部坐标系的三个轴
+                # z轴：从Calpha指向C
+                z_axis = c_coord - ca_coord
+                z_axis = z_axis / np.linalg.norm(z_axis)
+                z_axis = z_axis.astype(np.float64)
+                
+                # x轴：垂直于Calpha-C-N平面
+                n_to_ca = ca_coord - n_coord
+                n_to_ca = n_to_ca.astype(np.float64)
+                x_axis = np.cross(n_to_ca, z_axis)
+                x_axis = x_axis / np.linalg.norm(x_axis)
+                
+                # y轴：由x轴和z轴叉乘得到
+                y_axis = np.cross(z_axis, x_axis)
+                
+                # 构建旋转矩阵（frame）
+                rotation_matrix = np.array([x_axis, y_axis, z_axis])
+                
+                # 所有原子坐标转换到局部坐标系
+                coords = my_atoms[['x', 'y', 'z']].values
+                centered_coords = coords - ca_coord  # 先将坐标中心移到Calpha
+                rotated_coords = np.dot(centered_coords, rotation_matrix.T)
+                rotated_coords = rotated_coords.astype(np.float64)
+                
+                # 转换为PyTorch张量
+                # coords = torch.tensor(rotated_coords, dtype=torch.float64)
+                centered_coords = centered_coords - centered_coords.mean(0)
+                coords = torch.tensor(centered_coords, dtype=torch.float64)
+                
                 # Create grid data for this subunit
                 grid_data = GridData()
-                
-                coords = torch.tensor(my_atoms[['x', 'y', 'z']].values, dtype=torch.float64)
-                ca_coord = coords[int(ca_idx)]
-                coords = coords - ca_coord
                 
                 atom_types = torch.tensor([_element_mapping(e) for e in my_atoms.element], dtype=torch.long)
                 
@@ -137,7 +174,6 @@ class Protein(IterableDataset):
                 atom_on_bb = torch.tensor([(n in ['N', 'CA', 'C', 'O']) for n in my_atoms.name], dtype=torch.long)
                 sasa = torch.zeros(len(my_atoms), dtype=torch.float32)
                 charges = torch.zeros(len(my_atoms), dtype=torch.float32)
-                
                 grid_data.coords = coords
                 grid_data.grid_coords = self.grid_coords
                 grid_data.atom_types = atom_types
@@ -274,18 +310,18 @@ class ProteinDataset:
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.train_dataset) if distributed else None)
         drop_last = split == 'train'
-        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)
+        return PyGDataLoader(self.train_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=0)
 
     def val_loader(self):
         split = "valid"
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.valid_dataset) if distributed else None)
         drop_last = split == 'train'
-        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)     
+        return PyGDataLoader(self.valid_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=0)     
 
     def test_loader(self):
         split = "test"
         distributed = torch.distributed.is_initialized()
         sampler = (DistributedSampler(self.test_dataset) if distributed else None)
         drop_last = split == 'train'
-        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=4)
+        return PyGDataLoader(self.test_dataset, batch_size=self.batch_size, drop_last=drop_last, sampler=sampler, num_workers=0)

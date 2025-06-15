@@ -21,41 +21,13 @@ class equivariant_layer(nn.Module):
         self.p = 5
 
     def forward(self, x, pos, batch):
-        # Use local neighborhood around each residue instead of global graph
         edge_index = radius_graph(pos, r=4.5, batch=batch, loop=True)
         dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
         vec1, vec2 = self.message(x[edge_index[0]], x[edge_index[1]], dist, pos[edge_index[0]], pos[edge_index[1]])
-        
-        # Aggregate only within local neighborhoods instead of globally
-        # Use the center atom (CA) of each sample as reference
-        batch_size = batch.max().item() + 1
-        frames = []
-        
-        for b in range(batch_size):
-            mask = batch == b
-            if mask.sum() == 0:
-                continue
-                
-            # Find edges for this batch
-            edge_mask = mask[edge_index[0]] & mask[edge_index[1]]
-            
-            # Get local aggregation for the center region only
-            center_idx = mask.nonzero().squeeze()[0]  # Use first atom as reference
-            local_mask = edge_index[1] == center_idx
-            combined_mask = edge_mask & local_mask
-            
-            if combined_mask.sum() > 0:
-                v1_local = vec1[combined_mask].mean(dim=0)
-                v2_local = vec2[combined_mask].mean(dim=0)
-            else:
-                # Fallback to a small local region
-                v1_local = vec1[edge_mask][:10].mean(dim=0)
-                v2_local = vec2[edge_mask][:10].mean(dim=0)
-                
-            frame = self.gram_schmidt_batch(v1_local.unsqueeze(0), v2_local.unsqueeze(0))
-            frames.append(frame)
-        
-        return torch.cat(frames, dim=0)
+        vec1_out, vec2_out = global_add_pool(vec1, edge_index[0]), global_add_pool(vec2, edge_index[0])
+        vec1_out = global_mean_pool(vec1_out, batch)
+        vec2_out = global_mean_pool(vec2_out, batch)
+        return self.gram_schmidt_batch(vec1_out, vec2_out)
 
     def gram_schmidt_batch(self, v1, v2):
         n1 = v1 / (torch.norm(v1, dim=-1, keepdim=True)+1e-8)
@@ -138,20 +110,19 @@ class Block(nn.Module):
         return out
 
 class ResNet3D(nn.Module):
-    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256, dropout: float = 0.5):
+    def __init__(self, block, layers: list, num_classes: int = 20, in_channels: int = 256):
         super(ResNet3D, self).__init__()
 
         self.instance_norm1 = nn.BatchNorm3d(in_channels)
-        self.in_channels = in_channels
-        self.dropout = nn.Dropout(dropout)
 
-        # Keep channels constant instead of expanding
+        self.in_channels = in_channels
+
         self.layer1 = self._make_layer(block, in_channels, layers[0], stride=1)
-        self.layer2 = self._make_layer(block, in_channels, layers[1], stride=1)  # Changed from in_channels * 2
-        self.layer3 = self._make_layer(block, in_channels, layers[2], stride=1)  # Changed from in_channels * 4
+        self.layer2 = self._make_layer(block, in_channels * 2, layers[1], stride=1)
+        self.layer3 = self._make_layer(block, in_channels * 4, layers[2], stride=1)
 
         self.softmax = nn.functional.softmax
-        self.fc = nn.Linear(in_channels, num_classes)  # Changed from in_channels * 4
+        self.fc = nn.Linear(in_channels * 4, num_classes)
 
     def _make_layer(self, block, channels, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -162,20 +133,15 @@ class ResNet3D(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.instance_norm1(x)
+        x = self.instance_norm1(x)  # (bs, 128, 15, 15, 15)
 
-        x1 = self.layer1(x)
-        x1 = self.dropout(x1)
-        
-        x2 = self.layer2(x1)
-        x2 = self.dropout(x2)
-        
-        x3 = self.layer3(x2)
-        x3 = self.dropout(x3)
-        
+        x1 = self.layer1(x)  # (bs, 128, 11, 11, 11)
+        x2 = self.layer2(x1)  # (bs, 256, 7, 7, 7 )
+        x3 = self.layer3(x2) # (bs, 512, 3, 3, 3)
         x_out = F.max_pool3d(x3, kernel_size=x3.shape[-1], stride=3)
         
-        out = x_out.view(x_out.size(0), -1)
+        # Changed: squeeze only the spatial dimensions (2, 3, 4), not batch dimension (0)
+        out = x_out.view(x_out.size(0), -1)  # Reshape to (batch_size, features)
         out = self.fc(out)
         return out
 
@@ -186,7 +152,7 @@ class ProteinGrid(nn.Module):
         self.res_embedding = nn.Embedding(res_types, res_types)
         self.on_bb_embedding = nn.Embedding(on_bb, on_bb)
         self.feature_embedding = nn.Sequential(
-            nn.Linear(node_types + res_types + on_bb + 3 + 2, hidden_features),
+            nn.Linear(node_types + res_types + on_bb, hidden_features),
             act(),
             nn.Linear(hidden_features, hidden_features),
         )
@@ -195,8 +161,7 @@ class ProteinGrid(nn.Module):
         self.mpnn_layer = MPNNLayer(hidden_features=hidden_features, act=act)
 
         self.cnn_model = ResNet3D(
-            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features,
-            dropout=0.5  # Add dropout parameter
+            block=Block, layers=[1, 1, 1, 1], in_channels=hidden_features, num_classes=out_features
         )
         self.hidden_features = hidden_features
 
@@ -214,12 +179,12 @@ class ProteinGrid(nn.Module):
         res_embedding = self.res_embedding(res_types)
         on_bb_embedding = self.on_bb_embedding(atom_on_bb)
         atom_feature = self.feature_embedding(
-            torch.cat((atom_embedding, res_embedding, on_bb_embedding, node_pos, physical_feats), dim=-1)
+            torch.cat((atom_embedding, res_embedding, on_bb_embedding), dim=-1)
         )
         
         atom_batch = batch.batch[batch.is_atom_mask.bool() == True]  # Get batch assignments for atoms only
         frame = self.equi_layer(atom_feature, node_pos, atom_batch)
-
+        node_pos = torch.bmm(node_pos.unsqueeze(1), frame[atom_batch].permute(0, 2, 1)).squeeze()
         # Get the number of grid points per sample
         grid_points_per_sample = batch.grid_size[0]**3
         
@@ -229,14 +194,6 @@ class ProteinGrid(nn.Module):
         # Since grid_pos contains concatenated grid coordinates from all samples,
         # we need to select the appropriate grid coordinates for transformation
         # The first grid_points_per_sample points are the actual grid coordinates
-        grid_coords_single = grid_pos[:grid_points_per_sample]
-        
-        # Repeat grid coordinates for each sample in the batch
-        grid_pos_batched = grid_coords_single.unsqueeze(0).repeat(batch_size, 1, 1)
-        
-        # Apply frame transformation
-        grid_pos = torch.bmm(grid_pos_batched, frame.permute(0, 2, 1)).reshape(-1, 3)
-
         row_1, col_1 = knn(node_pos, grid_pos, k=3, batch_x=atom_batch, batch_y=grid_batch_idx)
         row_2, col_2 = knn(grid_pos, node_pos, k=3, batch_x=grid_batch_idx, batch_y=atom_batch)
 
