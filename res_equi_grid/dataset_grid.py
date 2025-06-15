@@ -156,6 +156,7 @@ class Protein(IterableDataset):
                 # 转换为PyTorch张量
                 # coords = torch.tensor(rotated_coords, dtype=torch.float64)
                 centered_coords = centered_coords - centered_coords.mean(0)
+                centered_coords = centered_coords.astype(np.float64)
                 coords = torch.tensor(centered_coords, dtype=torch.float64)
                 
                 # Create grid data for this subunit

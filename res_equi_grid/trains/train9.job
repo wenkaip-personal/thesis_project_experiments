@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_h100
+#SBATCH --gpus=1
+#SBATCH --job-name=ResEquiGrid
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=120:00:00
+
+export WANDB_API_KEY=6f62e8de47875e04cc5279883228dc25a454c816
+module purge
+
+# Activate your environment
+source activate protein_eng
+# Run your code
+srun python /home/wpan/thesis_project_experiments/res_equi_grid/main_grid.py --model_path '/home/wpan/thesis_project_experiments/res_equi_grid/models/model9/' \
+            --batch 2048 --lr 1e-4
