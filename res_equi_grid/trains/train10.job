@@ -14,4 +14,4 @@ module purge
 source activate protein_eng
 # Run your code
 srun python /home/wpan/thesis_project_experiments/res_equi_grid/main_grid.py --model_path '/home/wpan/thesis_project_experiments/res_equi_grid/models/model10/' \
-            --batch 2048 --lr 1e-3
+            --batch 256 --lr 1e-3
