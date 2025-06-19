@@ -220,6 +220,7 @@ def main():
         on_bb=2,      # On backbone indicator
         hidden_features=args.hidden_nf,
         out_features=20,  # Number of amino acid classes
+        grid_size=args.grid_size
     ).to(device)
 
     if args.test:
