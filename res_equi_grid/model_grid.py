@@ -539,11 +539,11 @@ class ProteinGrid(nn.Module):
             int(batch.grid_size[0]), int(batch.grid_size[0]), int(batch.grid_size[0]), 
             self.hidden_features
         ).permute(0, 4, 1, 2, 3)
-        # preds_1 = self.cnn_model(cnn_input)
+        preds_1 = self.cnn_model(cnn_input)
         preds_2 = self.transformer_model(cnn_input)
-        # preds = torch.cat((preds_1, preds_2), dim=-1)
-        # preds = F.log_softmax(self.fusion(preds), dim=-1)
-        preds = F.log_softmax(preds_2, dim=-1)
+        preds = torch.cat((preds_1, preds_2), dim=-1)
+        preds = F.log_softmax(self.fusion(preds), dim=-1)
+        # preds = F.log_softmax(preds_2, dim=-1)
         loss = F.cross_entropy(preds, batch.y, reduction='none')
         pred_labels = torch.max(preds, dim=-1)[1]
         acc = (pred_labels == batch.y).float()
