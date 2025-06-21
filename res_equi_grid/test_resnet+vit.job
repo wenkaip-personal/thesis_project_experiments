@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_h100
+#SBATCH --gpus=1
+#SBATCH --job-name=ResEquiGrid
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=04:00:00
+#SBATCH --output=/home/wpan/thesis_project_experiments/res_equi_grid/outputs/slurm_output_%j.out
+
+export WANDB_API_KEY=6f62e8de47875e04cc5279883228dc25a454c816
+module purge
+
+# Activate your environment
+source activate protein_eng
+# Run your code
+srun python /home/wpan/thesis_project_experiments/res_equi_grid/main_grid.py --data_path 'raw/RES/data/' --split_path 'indices/' --test '/home/wpan/thesis_project_experiments/res_equi_grid/models/model_resnet+vit_1/RES_1750352367.5180223_9.pt'

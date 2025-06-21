@@ -14,4 +14,4 @@ module purge
 # Activate your environment
 source activate protein_eng
 # Run your code
-srun python /home/wpan/thesis_project_experiments/res_equi_grid/main_grid.py --data_path 'raw/RES/data/' --split_path 'indices/' --test '/home/wpan/thesis_project_experiments/res_equi_grid/models/RES_1749115326.0966659_1.pt'
+srun python /home/wpan/thesis_project_experiments/res_equi_grid/main_grid.py --data_path 'raw/RES/data/' --split_path 'indices/' --test '/home/wpan/thesis_project_experiments/res_equi_grid/models/model_resnet2/RES_1750175665.9530983_10.pt'
