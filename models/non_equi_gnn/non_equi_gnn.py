@@ -52,17 +52,14 @@ class E_GCL(nn.Module):
                 nn.Linear(hidden_nf, 1),
                 nn.Sigmoid())
 
-    def edge_model(self, source, target, radial, edge_attr, coord):
+    def edge_model(self, source, target, radial, edge_attr, source_pos, target_pos):
         if edge_attr is None:  # Unused.
             out = torch.cat([source, target, radial], dim=1)
         else:
             out = torch.cat([source, target, radial, edge_attr], dim=1)
         
-        # Modified: Extract absolute positions and concatenate them
+        # Modified: Concatenate absolute positions
         # This breaks equivariance by using absolute coordinates
-        row, col = coord
-        source_pos = coord[row]  # Absolute positions of source nodes
-        target_pos = coord[col]  # Absolute positions of target nodes
         out = torch.cat([out, source_pos, target_pos], dim=1)
         
         out = self.edge_mlp(out)
@@ -106,8 +103,10 @@ class E_GCL(nn.Module):
         row, col = edge_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
 
-        # Pass coord to edge_model for absolute position information
-        edge_feat = self.edge_model(h[row], h[col], radial, edge_attr, coord)
+        # Pass absolute positions to edge_model for non-equivariant processing
+        source_pos = coord[row]
+        target_pos = coord[col]
+        edge_feat = self.edge_model(h[row], h[col], radial, edge_attr, source_pos, target_pos)
         coord = self.coord_model(coord, edge_index, coord_diff, edge_feat)
         h, agg = self.node_model(h, edge_index, edge_feat)
 
