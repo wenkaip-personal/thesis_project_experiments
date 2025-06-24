@@ -1,0 +1,18 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_h100
+#SBATCH --gpus=1
+#SBATCH --job-name=ResNonEquiTransformer
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=120:00:00
+#SBATCH --output=/home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/outputs/slurm_output_%j.out
+
+export WANDB_API_KEY=6f62e8de47875e04cc5279883228dc25a454c816
+module purge
+
+# Activate your environment
+source activate protein_eng
+# Run your code
+srun python /home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/main.py --data_path 'raw/RES/data/' --split_path 'indices/' --model_path '/home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/models/'
+
