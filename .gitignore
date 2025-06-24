@@ -4,6 +4,8 @@ models/en_transformer/.DS_Store
 .DS_Store
 models/egnn/__pycache__/egnn_clean.cpython-39.pyc
 models/en_transformer/__pycache__/en_transformer.cpython-39.pyc
+models/non_equi_gnn/__pycache__/non_equi_gnn.cpython-39.pyc
+models/non_equi_transformer/__pycache__/non_equi_transformer.cpython-39.pyc
 res_en_egnn_baseline/__pycache__/dataset.cpython-39.pyc
 res_en_egnn_baseline/__pycache__/model.cpython-39.pyc
 res_en_egnn_baseline/models/
@@ -16,3 +18,15 @@ res_equi_grid/__pycache__/dataset_grid.cpython-39.pyc
 res_equi_grid/__pycache__/model_grid.cpython-39.pyc
 res_equi_grid/models/
 res_equi_grid/outputs/
+res_non_equi_gnn_baseline/__pycache__/dataset.cpython-39.pyc
+res_non_equi_gnn_baseline/__pycache__/model.cpython-39.pyc
+res_non_equi_gnn_baseline/models/
+res_non_equi_gnn_baseline/outputs/
+res_non_equi_transformer_baseline/__pycache__/dataset.cpython-39.pyc
+res_non_equi_transformer_baseline/__pycache__/model.cpython-39.pyc
+res_non_equi_transformer_baseline/models/
+res_non_equi_transformer_baseline/outputs/
+res_non_equi_grid/__pycache__/dataset_grid.cpython-39.pyc
+res_non_equi_grid/__pycache__/model_grid.cpython-39.pyc
+res_non_equi_grid/models/
+res_non_equi_grid/outputs/
