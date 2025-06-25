@@ -7,7 +7,7 @@ import torch.nn as nn
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
-from models.non_equi_transformer.non_equi_transformer import NonEquivariantTransformer
+from models.non_equi_transformer.non_equi_transformer import EnTransformer
 
 class ResEnTransformer(nn.Module):
     def __init__(self, input_nf = 9, output_nf = 20, hidden_nf = 128, n_layers=4, n_heads=4, device='cuda'):
@@ -17,7 +17,7 @@ class ResEnTransformer(nn.Module):
         self.embed = nn.Embedding(input_nf, input_nf)
         
         # Main En Transformer network - now expecting hidden_nf as input dimension
-        self.transformer = NonEquivariantTransformer(
+        self.transformer = EnTransformer(
             input_nf=input_nf,
             output_nf=hidden_nf,
             hidden_nf=hidden_nf,
