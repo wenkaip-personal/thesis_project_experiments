@@ -14,4 +14,4 @@ module purge
 # Activate your environment
 source activate protein_eng
 # Run your code
-srun python /home/wpan/thesis_project_experiments/res_non_equi_grid/main_grid.py --test '/home/wpan/thesis_project_experiments/res_non_equi_grid/models/...'
+srun python /home/wpan/thesis_project_experiments/res_non_equi_grid/main_grid.py --test '/home/wpan/thesis_project_experiments/res_non_equi_grid/models/RES_1750767879.9587402_11.pt'

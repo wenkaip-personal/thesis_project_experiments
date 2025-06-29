@@ -14,4 +14,4 @@ module purge
 # Activate your environment
 source activate protein_eng
 # Run your code
-srun python /home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/main.py --data_path 'raw/RES/data/' --split_path 'indices/' --test '/home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/models/...'
+srun python /home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/main.py --data_path 'raw/RES/data/' --split_path 'indices/' --test '/home/wpan/thesis_project_experiments/res_non_equi_transformer_baseline/models/RES_1750845259.5242362_39.pt'
